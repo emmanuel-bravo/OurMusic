@@ -3,8 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { generateAllFixtures, readWavPcm, writeWavPcm } from './generate_fixtures.mjs';
+import {
+  generateAllFixtures,
+  readWavPcm,
+  writeWavPcm,
+  writeDsfSine,
+  writeDffSine,
+} from './generate_fixtures.mjs';
 import { PresetManager } from '../src/dsp/presetManager.mjs';
+import { EngineBridge } from '../src/engine/engineBridge.mjs';
 import { readMetadata, writeMetadata } from '../src/tags/tagParser.mjs';
 import { createOurMusicApp } from '../src/server.mjs';
 
@@ -26,7 +33,16 @@ async function runTest(name, fn) {
 /**
  * Helper to drive bin/ourmusic-engine deterministically into wav:<outPath> and return final status + events.
  */
-function runEngineRender({ inputFile, nextFile = '', outWav, setupCmds = [], midCmds = [], dop = false }) {
+function runEngineRender({
+  inputFile,
+  nextFile = '',
+  outWav,
+  setupCmds = [],
+  midCmds = [],
+  dop = false,
+  dsdMode = '',
+  bitPerfect = true,
+}) {
   return new Promise((resolve, reject) => {
     const proc = spawn(ENGINE_BIN, [], { stdio: ['pipe', 'pipe', 'pipe'] });
     let buf = '';
@@ -45,7 +61,13 @@ function runEngineRender({ inputFile, nextFile = '', outWav, setupCmds = [], mid
         const msg = JSON.parse(line);
 
         if (msg.type === 'ready') {
-          send({ cmd: 'set_device', device: `wav:${outWav}`, bitPerfect: true, dop });
+          send({
+            cmd: 'set_device',
+            device: `wav:${outWav}`,
+            bitPerfect,
+            dop,
+            ...(dsdMode ? { dsdMode } : {}),
+          });
           for (const c of setupCmds) send(c);
           send({ cmd: 'play', path: inputFile, nextPath: nextFile });
           if (midCmds.length > 0) {
@@ -506,6 +528,372 @@ await runTest('7.2 Verificación de Instalación Local Aislada de REA en .tools/
   const ver = execFileSync(reaBin, ['--version'], { encoding: 'utf8' }).trim();
   assert.ok(ver.length > 0);
   assert.ok(fs.existsSync(path.join(ROOT_DIR, '.agents', 'plugins', 'rea', 'mcp_config.json')));
+});
+
+/* 8. POINT 1 & POINT 2 AUDIOPHILE UPGRADES + OPTIMIZATIONS */
+await runTest('8.1 Resampler Sinc Polifásico Kaiser 64-bit (96->48 kHz Anti-Aliasing >90 dB y 44.1->96 kHz)', async () => {
+  // Left = 1 kHz passband (-6 dBFS), Right = 30 kHz ultrasonic stopband (-6 dBFS, above 24 kHz Nyquist of 48 kHz)
+  const srcTestWav = path.join(TMP_DIR, 'src_96k_alias.wav');
+  const amp24 = Math.round(0.5 * 8388607);
+  writeWavPcm(srcTestWav, {
+    sampleRate: 96000,
+    channels: 2,
+    bitDepth: 24,
+    frames: 24000, // 0.25 s
+    sampleFn: (f, c) => {
+      const t = f / 96000;
+      return c === 0
+        ? Math.round(amp24 * Math.sin(2 * Math.PI * 1000 * t))
+        : Math.round(amp24 * Math.sin(2 * Math.PI * 30000 * t));
+    },
+  });
+
+  const out48 = path.join(TMP_DIR, 'src_out_48k.wav');
+  await runEngineRender({
+    inputFile: srcTestWav,
+    outWav: out48,
+    setupCmds: [{ cmd: 'set_resampler', targetRate: 48000, quality: 'ultra' }],
+  });
+
+  const w48 = readWavPcm(out48);
+  assert.equal(w48.sampleRate, 48000);
+  assert.ok(Math.abs(w48.frames - 12000) <= 4, `Conteo de tramas tras flush_tail inexacto: ${w48.frames}`);
+
+  // Steady-state interior (skip tiny filter edge transients)
+  const rmsPass = channelRms(w48, 0, 1000, 11000);
+  const rmsAlias = channelRms(w48, 1, 1000, 11000);
+  const expectedRms = 0.5 / Math.SQRT2;
+  const passErrDb = Math.abs(20 * Math.log10(rmsPass / expectedRms));
+  const aliasRejDb = 20 * Math.log10(rmsPass / Math.max(rmsAlias, 1e-12));
+
+  assert.ok(passErrDb < 0.05, `Error en banda pasante 1 kHz excesivo: ${passErrDb.toFixed(4)} dB`);
+  assert.ok(aliasRejDb > 90, `Rechazo ultrasónico anti-aliasing insuficiente: ${aliasRejDb.toFixed(1)} dB`);
+
+  // Asynchronous fractional upsampling 44.1 kHz -> 96 kHz
+  const out96 = path.join(TMP_DIR, 'src_out_96k.wav');
+  await runEngineRender({
+    inputFile: fx.ref16,
+    outWav: out96,
+    setupCmds: [{ cmd: 'set_resampler', targetRate: 96000, quality: 'high' }],
+  });
+  const wRef16 = readWavPcm(fx.ref16);
+  const wUp96 = readWavPcm(out96);
+  assert.equal(wUp96.sampleRate, 96000);
+  const upGainDiffDb = Math.abs(
+    20 * Math.log10(channelRms(wUp96, 0, 2000, 44000) / channelRms(wRef16, 0, 1000, 20000)),
+  );
+  assert.ok(upGainDiffDb < 0.05, `Ganancia tras upsampling 44.1->96 kHz desviada: ${upGainDiffDb.toFixed(4)} dB`);
+});
+
+await runTest('9.1 Ultra-Hi-Res DSD512 (22.5792 MHz) y DSD1024 (45.1584 MHz) + Modo DSD Nativo Raw', async () => {
+  const dsf512 = path.join(TMP_DIR, 'ultra_dsd512.dsf');
+  const dff1024 = path.join(TMP_DIR, 'ultra_dsd1024.dff');
+  // 15 ms of DSD512 and 8 ms of DSD1024 keep test fast (~50 ms) while exercising full 128-tap LUT FIR
+  writeDsfSine(dsf512, 0.015, 1000, 1000, 22579200);
+  writeDffSine(dff1024, 0.008, 1000, 45158400);
+
+  const probe512 = await EngineBridge.probeCli(dsf512);
+  const probe1024 = await EngineBridge.probeCli(dff1024);
+  assert.equal(probe512.dsdBitRate, 22579200);
+  assert.equal(probe1024.dsdBitRate, 45158400);
+  assert.equal(probe512.sampleRate, 352800);
+  assert.equal(probe1024.sampleRate, 352800);
+
+  const out512 = path.join(TMP_DIR, 'out_dsd512.wav');
+  const out1024 = path.join(TMP_DIR, 'out_dsd1024.wav');
+  await runEngineRender({ inputFile: dsf512, outWav: out512 });
+  await runEngineRender({ inputFile: dff1024, outWav: out1024 });
+
+  const w512 = readWavPcm(out512);
+  const w1024 = readWavPcm(out1024);
+  assert.equal(w512.sampleRate, 352800);
+  assert.equal(w1024.sampleRate, 352800);
+  assert.ok(channelRms(w512, 0, 400) > 0.2, 'DSD512 FIR PCM debe reconstruir onda senoidal limpia');
+  assert.ok(channelRms(w1024, 0, 400) > 0.2, 'DSD1024 FIR PCM debe reconstruir onda senoidal limpia');
+
+  // Verify Native Raw 1-bit DSD Direct stream mode (for ASIO DSD / ALSA Native DSD DACs)
+  const outNative = path.join(TMP_DIR, 'out_dsd_native.wav');
+  const { events } = await runEngineRender({
+    inputFile: fx.dsfFile,
+    outWav: outNative,
+    dsdMode: 'native',
+  });
+  const startedEv = events.find((e) => e.event === 'track_started');
+  assert.equal(startedEv?.data?.isDsdNative, true, 'El modo dsdMode=native debe activar transporte DSD directo');
+});
+
+await runTest('10.1 Ecualizador Paramétrico PEQ de 16 Bandas (Notch Quirúrgico Q=10 + Low-Shelf)', async () => {
+  const outPeq = path.join(TMP_DIR, 'peq_notch_shelf.wav');
+  await runEngineRender({
+    inputFile: fx.eqTestWav, // Left = 910 Hz, Right = 60 Hz @ 48 kHz
+    outWav: outPeq,
+    setupCmds: [
+      {
+        cmd: 'set_peq',
+        enabled: true,
+        preampDb: 0,
+        smoothing: false,
+        limiter: false,
+        bands: [
+          { enabled: true, type: 'notch', freq: 910, q: 10.0, gainDb: 0 },
+          { enabled: true, type: 'low_shelf', freq: 150, q: 0.7071, gainDb: 6.0 },
+        ],
+      },
+    ],
+  });
+
+  const wFlat = readWavPcm(path.join(TMP_DIR, 'eq_flat.wav'));
+  const wPeq = readWavPcm(outPeq);
+  const notch910Db = 20 * Math.log10(Math.max(channelRms(wPeq, 0, 6000), 1e-9) / channelRms(wFlat, 0, 6000));
+  const shelf60Db = 20 * Math.log10(channelRms(wPeq, 1, 6000) / channelRms(wFlat, 1, 6000));
+
+  assert.ok(notch910Db < -28.0, `Filtro Notch Q=10 @ 910 Hz debe atenuar > 28 dB (obtenido ${notch910Db.toFixed(1)} dB)`);
+  assert.ok(shelf60Db > 5.0 && shelf60Db < 6.4, `Low-Shelf +6 dB debe elevar 60 Hz ~6 dB (obtenido ${shelf60Db.toFixed(2)} dB)`);
+});
+
+await runTest('11.1 Convolver FIR Híbrido FFT de Latencia Cero (Dirac >512 taps, Eco Multi-Partición y Resampleo IR)', async () => {
+  // 1. 1024-tap Dirac impulse IR at 48 kHz ([1.0, 0, 0, ...])
+  const diracIr = path.join(TMP_DIR, 'ir_dirac_1024.wav');
+  writeWavPcm(diracIr, {
+    sampleRate: 48000,
+    channels: 2,
+    bitDepth: 24,
+    frames: 1024,
+    sampleFn: (f) => (f === 0 ? 8388607 : 0),
+  });
+
+  const outDirac = path.join(TMP_DIR, 'conv_dirac_out.wav');
+  await runEngineRender({
+    inputFile: fx.eqTestWav,
+    outWav: outDirac,
+    setupCmds: [
+      { cmd: 'set_convolver', enabled: true, irPath: diracIr, mix: 1.0, gainDb: 0, autoNormalize: false },
+    ],
+  });
+  const wOrig48 = readWavPcm(fx.eqTestWav);
+  const wDirac = readWavPcm(outDirac);
+  assert.ok(maxSampleDiff(wOrig48, wDirac) <= 1, 'Convolución con impulso Dirac debe tener 0 latencia y <= 1 LSB');
+
+  // 2. Two-tap cross-partition echo IR: 0.5 * x[n] + 0.5 * x[n - 600] (tap 0 in head, tap 600 in FFT tail partition #2!)
+  const echoIr = path.join(TMP_DIR, 'ir_echo_600.wav');
+  const half24 = Math.round(0.5 * 8388608);
+  writeWavPcm(echoIr, {
+    sampleRate: 48000,
+    channels: 2,
+    bitDepth: 24,
+    frames: 1024,
+    sampleFn: (f) => (f === 0 || f === 600 ? half24 : 0),
+  });
+
+  const outEcho = path.join(TMP_DIR, 'conv_echo_out.wav');
+  await runEngineRender({
+    inputFile: fx.eqTestWav,
+    outWav: outEcho,
+    setupCmds: [
+      { cmd: 'set_convolver', enabled: true, irPath: echoIr, mix: 1.0, gainDb: 0, autoNormalize: false },
+    ],
+  });
+  const wEcho = readWavPcm(outEcho);
+  let maxEchoErr = 0;
+  for (let f = 700; f < wEcho.frames; f++) {
+    const expectedL = Math.round(0.5 * wOrig48.samples[f * 2] + 0.5 * wOrig48.samples[(f - 600) * 2]);
+    maxEchoErr = Math.max(maxEchoErr, Math.abs(wEcho.samples[f * 2] - expectedL));
+  }
+  assert.ok(maxEchoErr <= 2, `Partición FFT de cola en tap 600 debe ser exacta (maxEchoErr=${maxEchoErr} LSB)`);
+
+  // 3. Automatic IR sample-rate conversion: apply 48 kHz Dirac IR onto 96 kHz/24-bit stream!
+  const outIrResamp = path.join(TMP_DIR, 'conv_ir_resamp_96k.wav');
+  await runEngineRender({
+    inputFile: fx.ref24,
+    outWav: outIrResamp,
+    setupCmds: [
+      { cmd: 'set_convolver', enabled: true, irPath: diracIr, mix: 1.0, gainDb: 0, autoNormalize: false },
+    ],
+  });
+  const wRef24 = readWavPcm(fx.ref24);
+  const wIr96 = readWavPcm(outIrResamp);
+  const irGainErrDb = Math.abs(
+    20 * Math.log10(channelRms(wIr96, 0, 2000, 22000) / channelRms(wRef24, 0, 2000, 22000)),
+  );
+  assert.ok(irGainErrDb < 0.15, `Ganancia tras resampleo automático de IR 48->96 kHz debe ser 0 dB (err=${irGainErrDb.toFixed(3)} dB)`);
+});
+
+await runTest('12.1 Escáner ITU-R BS.1770-4 / EBU R128 (LUFS + True-Peak 4x) y ReplayGain 2.0 Anti-Clipping', async () => {
+  const fullSine = path.join(TMP_DIR, 'r128_0dbfs.wav');
+  const quietSine = path.join(TMP_DIR, 'r128_minus15dbfs.wav');
+  const scale15 = Math.pow(10, -15 / 20);
+
+  writeWavPcm(fullSine, {
+    sampleRate: 48000,
+    channels: 2,
+    bitDepth: 24,
+    frames: 57600, // 1.2 s (>= 3 overlapping 400 ms gating blocks)
+    sampleFn: (f) => Math.round(8388607 * Math.sin((2 * Math.PI * 1000 * f) / 48000)),
+  });
+  writeWavPcm(quietSine, {
+    sampleRate: 48000,
+    channels: 2,
+    bitDepth: 24,
+    frames: 57600,
+    sampleFn: (f) => Math.round(8388607 * scale15 * Math.sin((2 * Math.PI * 1000 * f) / 48000)),
+  });
+
+  const scan0 = await EngineBridge.scanLoudnessCli(fullSine);
+  const scan15 = await EngineBridge.scanLoudnessCli(quietSine);
+
+  // Theoretical ITU-R BS.1770-4 loudness of 0 dBFS 1 kHz dual-mono stereo sine:
+  // K-weighting shelf @ 1 kHz = +0.655 dB -> L_K = -0.691 + 10*log10(2 * 0.5 * 10^(0.655/10)) = -0.036 LUFS
+  assert.ok(Math.abs(scan0.integratedLufs - -0.036) < 0.08, `LUFS @ 0 dBFS esperado ~-0.036, obtenido ${scan0.integratedLufs}`);
+  assert.ok(Math.abs(scan0.integratedLufs - scan15.integratedLufs - 15.0) < 0.05, 'Delta relativo R128 debe ser exactamente 15.00 LU');
+  assert.ok(Math.abs(scan0.truePeakDbtp) < 0.05, `True-Peak esperado ~0.0 dBTP, obtenido ${scan0.truePeakDbtp}`);
+
+  // Live ReplayGain anti-clipping test: quietSine has peak ~0.1778 (-15 dBFS); requesting +20 dB with preventClipping=true must clamp gain to 1/0.1778 (~ +15 dB) without clipping!
+  const outRg = path.join(TMP_DIR, 'rg_clamped.wav');
+  await runEngineRender({
+    inputFile: quietSine,
+    outWav: outRg,
+    setupCmds: [
+      {
+        cmd: 'set_eq',
+        enabled: false,
+        limiter: false,
+        smoothing: false,
+      },
+      {
+        cmd: 'set_replaygain',
+        mode: 'track',
+        preampDb: 0,
+        preventClipping: true,
+        trackGainDb: 20.0,
+        trackPeak: scan15.truePeak,
+      },
+    ],
+  });
+  const wRg = readWavPcm(outRg);
+  const rgRms = channelRms(wRg, 0, 4000, 50000);
+  // Clamped to 0 dBFS sine -> RMS ~ 0.7071 (within 2%)
+  assert.ok(Math.abs(rgRms - Math.SQRT1_2) < 0.02, `Protección anti-clipping ReplayGain debe limitar exactamente a 0 dBFS (rms=${rgRms.toFixed(4)})`);
+});
+
+await runTest('13.1 Crossfeed Acústico de Auriculares (Bauer/Meier ILD Pasa-Bajos + Micro-Retardo ITD)', async () => {
+  // Left-only dual tone (200 Hz bass + 6000 Hz treble), Right = digital silence (0)
+  const hardLeftWav = path.join(TMP_DIR, 'hard_left_dual.wav');
+  writeWavPcm(hardLeftWav, {
+    sampleRate: 48000,
+    channels: 2,
+    bitDepth: 16,
+    frames: 24000,
+    sampleFn: (f, c) => {
+      if (c === 1) return 0;
+      const t = f / 48000;
+      return Math.round(9000 * Math.sin(2 * Math.PI * 200 * t) + 9000 * Math.sin(2 * Math.PI * 6000 * t));
+    },
+  });
+
+  const outXf = path.join(TMP_DIR, 'out_crossfeed.wav');
+  await runEngineRender({
+    inputFile: hardLeftWav,
+    outWav: outXf,
+    setupCmds: [{ cmd: 'set_crossfeed', enabled: true, cutoffHz: 700, feedDb: -6.0, itdUs: 300 }],
+  });
+
+  const wXf = readWavPcm(outXf);
+  // Measure DFT magnitude on Right channel at 200 Hz vs 6000 Hz to verify head-shadow ILD low-pass
+  const goertzelMag = (freq) => {
+    let re = 0, im = 0;
+    const N = 12000;
+    for (let n = 0; n < N; n++) {
+      const s = wXf.samples[(4000 + n) * 2 + 1] / 32768;
+      const ang = (2 * Math.PI * freq * n) / 48000;
+      re += s * Math.cos(ang);
+      im -= s * Math.sin(ang);
+    }
+    return Math.hypot(re, im) / N;
+  };
+  const mag200 = goertzelMag(200);
+  const mag6000 = goertzelMag(6000);
+  const ildDiffDb = 20 * Math.log10(mag200 / Math.max(mag6000, 1e-12));
+
+  assert.ok(mag200 > 0.03, 'El canal derecho debe recibir señal cruzada de graves');
+  assert.ok(ildDiffDb > 12.0, `El filtro ILD de sombra acústica debe atenuar 6 kHz frente a 200 Hz >12 dB (diff=${ildDiffDb.toFixed(1)} dB)`);
+});
+
+await runTest('14.1 Verificación Estática C11 de Backend Windows ASIO (hal_asio.c) y Endpoints REST DSP v2', async () => {
+  execFileSync('gcc', [
+    '-fsyntax-only',
+    '-Wall',
+    '-Wextra',
+    '-Wno-unused-parameter',
+    '-std=c11',
+    '-D_POSIX_C_SOURCE=200809L',
+    '-DOM_WASAPI_SYNTAX_CHECK',
+    path.join(ROOT_DIR, 'native', 'hal_asio.c'),
+  ]);
+
+  const appDataDir = path.join(TMP_DIR, 'server_dsp_v2');
+  const scanLibDir = path.join(TMP_DIR, 'tagged_lib_v2');
+  fs.mkdirSync(scanLibDir, { recursive: true });
+  fs.copyFileSync(fx.flac16, path.join(scanLibDir, 'test_rg.flac'));
+  fs.copyFileSync(fx.alac16, path.join(scanLibDir, 'test_rg.m4a'));
+  fs.copyFileSync(fx.mp3File, path.join(scanLibDir, 'test_rg.mp3'));
+
+  const app = await createOurMusicApp({ dataDir: appDataDir, port: 0, pollIntervalMs: 80 });
+  try {
+    const scanRes = await fetch(`${app.baseUrl}/api/library/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory: scanLibDir }),
+    }).then((r) => r.json());
+    assert.equal(scanRes.report.indexedCount, 3);
+
+    // Scan R128 loudness & write ReplayGain 2.0 tags into all 3 container formats via REST API
+    for (const trk of scanRes.tracks) {
+      const lRes = await fetch(`${app.baseUrl}/api/tracks/${trk.id}/loudness`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ writeTags: true }),
+      }).then((r) => r.json());
+      assert.equal(lRes.ok, true);
+      assert.ok(Number.isFinite(lRes.loudness.integratedLufs));
+
+      const reRead = await readMetadata(trk.filePath, { probeAudio: false });
+      assert.ok(
+        Math.abs(reRead.replayGainTrackDb - lRes.loudness.replayGain18Db) < 0.05,
+        `Tag ReplayGain no persistió en ${trk.fileName}`,
+      );
+    }
+
+    // Verify PEQ, Crossfeed, ReplayGain, and Resampler REST endpoints
+    const peqRes = await fetch(`${app.baseUrl}/api/dsp/peq`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        enabled: true,
+        preampDb: -1.5,
+        bands: [{ enabled: true, type: 'peaking', freq: 2500, q: 2.2, gainDb: -3.0 }],
+      }),
+    }).then((r) => r.json());
+    assert.equal(peqRes.ok, true);
+    assert.equal(peqRes.eqState.peqMode, true);
+    assert.equal(peqRes.eqState.peqBands[0].freq, 2500);
+
+    const xfRes = await fetch(`${app.baseUrl}/api/dsp/crossfeed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true, cutoffHz: 650, feedDb: -5.5, itdUs: 280 }),
+    }).then((r) => r.json());
+    assert.equal(xfRes.crossfeed.enabled, true);
+
+    const srcRes = await fetch(`${app.baseUrl}/api/dsp/resampler`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetRate: 96000, quality: 'ultra' }),
+    }).then((r) => r.json());
+    assert.equal(srcRes.resampler.targetRate, 96000);
+    assert.equal(srcRes.resampler.quality, 'ultra');
+  } finally {
+    await app.close();
+  }
 });
 
 fs.rmSync(TMP_DIR, { recursive: true, force: true });

@@ -3,6 +3,7 @@
 
 #include "audio_formats.h"
 #include "dsp_eq.h"
+#include "dsp_resampler.h"
 #include "hal.h"
 #include "os_compat.h"
 
@@ -34,15 +35,17 @@ typedef struct {
     om_cond_t  cond_can_push;
     om_cond_t  cond_can_pop;
 
-    bool       running;
+    bool        running;
     om_thread_t dec_thread;
     om_thread_t out_thread;
 
-    /* Ring buffer in RAM for gapless streaming */
+    /* Zero-copy SPSC-style ring buffer in RAM for lock-light gapless streaming */
     om_ring_slot_t *ring;
     size_t          ring_head;
     size_t          ring_tail;
     size_t          ring_count;
+    bool            dec_busy;         /* True while decoder_worker is inside read_frames() unlocked */
+    bool            out_slot_in_use;  /* True while output_worker holds &ring[ring_head] zero-copy */
 
     /* Playback control & decoder state */
     om_play_state_t state;
@@ -52,6 +55,7 @@ typedef struct {
     char            req_device_id[1024];
     bool            prefer_bitperfect_hw;
     bool            prefer_dsd_dop;
+    om_dsd_mode_t   dsd_mode;
     double          volume_lin;       /* Software volume when bit-perfect is off (1.0 = unity) */
     bool            volume_unity;
 
@@ -72,15 +76,24 @@ typedef struct {
     /* Output hardware state & live telemetry */
     om_hal_handle_t hal;
     bool            hal_open;
+    uint32_t        last_requested_hal_rate;
 
-    char            playing_path[1024];
+    char             playing_path[1024];
     om_stream_info_t playing_info;
-    uint64_t        played_frame_idx;
-    bool            signal_bitperfect;
-    uint64_t        gapless_transitions;
+    uint64_t         played_frame_idx;
+    bool             signal_bitperfect;
+    uint64_t         gapless_transitions;
 
-    /* DSP + Equalizer pipeline */
-    om_dsp_chain_t  dsp;
+    /* High-precision 64-bit Polyphase Kaiser-Sinc Resampler (engages only when needed) */
+    om_resampler_t   resampler;
+    uint32_t         resampler_target_rate; /* 0 = Auto Bit-Perfect native rate, >0 = forced Hz */
+    om_src_quality_t resampler_quality;
+    bool             resampler_active;
+    double          *src_out_buf;
+    size_t           src_out_cap_frames;
+
+    /* DSP + Parametric Equalizer + Convolver + Crossfeed + ReplayGain pipeline */
+    om_dsp_chain_t   dsp;
 
     /* Async event callback */
     om_engine_event_cb event_cb;
@@ -91,6 +104,9 @@ int  om_engine_init(om_engine_t *eng, om_engine_event_cb cb, void *ud);
 void om_engine_shutdown(om_engine_t *eng);
 
 int  om_engine_set_output_device(om_engine_t *eng, const char *device_id, bool prefer_bitperfect, bool prefer_dop);
+void om_engine_set_dsd_mode(om_engine_t *eng, om_dsd_mode_t mode);
+void om_engine_set_resampler_config(om_engine_t *eng, uint32_t target_rate, om_src_quality_t quality);
+
 int  om_engine_load_and_play(om_engine_t *eng, const char *path, const char *next_path, char *err, size_t err_cap);
 int  om_engine_queue_next_gapless(om_engine_t *eng, const char *next_path, char *err, size_t err_cap);
 void om_engine_clear_next_gapless(om_engine_t *eng);

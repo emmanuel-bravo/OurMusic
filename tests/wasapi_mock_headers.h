@@ -2,9 +2,9 @@
 #define OM_WASAPI_MOCK_HEADERS_H
 
 /*
- * Minimal clean-room C11 type and COM vtable declarations mirroring documented
- * Microsoft Windows SDK WASAPI / MMDevice / MMCSS signatures so hal_wasapi.c can
- * undergo strict -fsyntax-only type verification on non-Windows hosts.
+ * Minimal clean-room C11 type and COM/Registry declarations mirroring documented
+ * Microsoft Windows SDK WASAPI / MMDevice / MMCSS / Win32 Registry / COM signatures
+ * so hal_wasapi.c and hal_asio.c undergo strict -fsyntax-only type verification on Linux.
  */
 
 #include <stdint.h>
@@ -12,6 +12,7 @@
 #include <wchar.h>
 
 typedef long HRESULT;
+typedef long LSTATUS;
 typedef unsigned long DWORD;
 typedef unsigned short WORD;
 typedef unsigned char BYTE;
@@ -21,18 +22,29 @@ typedef int64_t REFERENCE_TIME;
 typedef wchar_t WCHAR;
 typedef WCHAR *LPWSTR;
 typedef const WCHAR *LPCWSTR;
+typedef char *LPSTR;
+typedef const char *LPCSTR;
 typedef void *HANDLE;
+typedef void *HWND;
+typedef void *HKEY;
 
 #define S_OK ((HRESULT)0L)
+#define ERROR_SUCCESS 0L
 #define SUCCEEDED(hr) (((HRESULT)(hr)) >= 0)
 #define FAILED(hr) (((HRESULT)(hr)) < 0)
 
 #define CP_UTF8 65001
 #define COINIT_MULTITHREADED 0x0
+#define COINIT_APARTMENTTHREADED 0x2
+#define CLSCTX_INPROC_SERVER 0x1
 #define CLSCTX_ALL 0x17
 #define DEVICE_STATE_ACTIVE 0x00000001
 #define STGM_READ 0x00000000L
 #define VT_LPWSTR 31
+
+#define HKEY_LOCAL_MACHINE ((HKEY)(uintptr_t)0x80000002ULL)
+#define KEY_READ 0x20019U
+#define REG_SZ 1U
 
 #define WAVE_FORMAT_IEEE_FLOAT 0x0003
 #define WAVE_FORMAT_EXTENSIBLE 0xFFFE
@@ -116,11 +128,18 @@ int WideCharToMultiByte(UINT cp, DWORD flags, const WCHAR *wstr, int cchWide, ch
 int MultiByteToWideChar(UINT cp, DWORD flags, const char *mbstr, int cbMulti, WCHAR *wstr, int cchWide);
 HRESULT CoInitializeEx(void *pvReserved, DWORD dwCoInit);
 HRESULT CoCreateInstance(const CLSID *rclsid, void *pUnkOuter, DWORD dwClsContext, const IID *riid, void **ppv);
+HRESULT CLSIDFromString(LPCWSTR lpsz, CLSID *pclsid);
 void CoTaskMemFree(void *pv);
 void PropVariantInit(PROPVARIANT *pvar);
 HRESULT PropVariantClear(PROPVARIANT *pvar);
 HANDLE AvSetMmThreadCharacteristicsW(LPCWSTR TaskName, DWORD *TaskIndex);
 int AvRevertMmThreadCharacteristics(HANDLE AvrtHandle);
+HWND GetDesktopWindow(void);
+
+LSTATUS RegOpenKeyExA(HKEY hKey, LPCSTR lpSubKey, DWORD ulOptions, DWORD samDesired, HKEY *phkResult);
+LSTATUS RegEnumKeyExA(HKEY hKey, DWORD dwIndex, LPSTR lpName, DWORD *lpcchName, DWORD *lpReserved, LPSTR lpClass, DWORD *lpcchClass, void *lpftLastWriteTime);
+LSTATUS RegQueryValueExA(HKEY hKey, LPCSTR lpValueName, DWORD *lpReserved, DWORD *lpType, BYTE *lpData, DWORD *lpcbData);
+LSTATUS RegCloseKey(HKEY hKey);
 
 HRESULT IMMDeviceEnumerator_EnumAudioEndpoints(IMMDeviceEnumerator *self, EDataFlow flow, DWORD mask, IMMDeviceCollection **ppDevices);
 HRESULT IMMDeviceEnumerator_GetDefaultAudioEndpoint(IMMDeviceEnumerator *self, EDataFlow flow, ERole role, IMMDevice **ppEndpoint);

@@ -16,21 +16,28 @@ typedef enum {
     OM_CODEC_DSD     = 5
 } om_codec_id_t;
 
+typedef enum {
+    OM_DSD_MODE_PCM    = 0, /* 64-bit 128-tap Blackman-Harris FIR decimation to Hi-Res PCM */
+    OM_DSD_MODE_DOP    = 1, /* Bit-Perfect DoP v1.1 (0x05 / 0xFA markers in 24-bit words) */
+    OM_DSD_MODE_NATIVE = 2  /* Raw 1-bit Native DSD Direct stream (32 bits/ch per frame for ASIO DSD) */
+} om_dsd_mode_t;
+
 typedef struct {
     om_codec_id_t codec;
-    uint32_t sample_rate;      /* Output PCM/DoP rate in Hz (e.g. 44100, 96000, 176400) */
-    uint32_t dsd_bit_rate;     /* Original 1-bit DSD rate if codec == OM_CODEC_DSD (e.g. 2822400) */
+    uint32_t sample_rate;      /* Output PCM/DoP/DSD-word rate in Hz (e.g. 44100, 96000, 176400, 352800) */
+    uint32_t dsd_bit_rate;     /* Original 1-bit DSD rate if codec == OM_CODEC_DSD (2.8224 MHz .. 45.1584 MHz) */
     uint16_t channels;         /* 1..8 */
     uint16_t bit_depth;        /* Native integer precision: 8, 16, 24, or 32 */
     bool     is_float;         /* True if source is IEEE float or float-decoded (MP3 / DSD PCM) */
     bool     is_dop;           /* True if frames carry 24-bit DoP markers (0x05 / 0xFA) */
-    uint64_t total_frames;     /* Total PCM/DoP frames if known, else 0 */
+    bool     is_dsd_native;    /* True if frames carry raw 32-bit MSB-first 1-bit Native DSD words */
+    uint64_t total_frames;     /* Total PCM/DoP/DSD frames if known, else 0 */
     double   duration_sec;     /* Total duration in seconds */
 } om_stream_info_t;
 
 /*
  * Dual-representation audio frame block:
- * - For bit-perfect integer/DoP passthrough, `pcm_i32` holds right-aligned exact
+ * - For bit-perfect integer/DoP/DSD-Native passthrough, `pcm_i32` holds right-aligned exact
  *   signed integers in the range [-(1 << (bit_depth-1)), (1 << (bit_depth-1)) - 1].
  * - For float sources or DSP processing, `pcm_f64` holds interleaved 64-bit floats
  *   in [-1.0, +1.0]. Helper routines convert losslessly between representations.
@@ -57,10 +64,10 @@ struct om_decoder {
 
 /* Convert right-aligned int32 sample at `bit_depth` to normalized [-1.0, 1.0] double */
 static inline double om_i32_to_f64(int32_t v, uint16_t bit_depth) {
-    if (bit_depth <= 8)  return (double)v / 128.0;
-    if (bit_depth <= 16) return (double)v / 32768.0;
-    if (bit_depth <= 24) return (double)v / 8388608.0;
-    return (double)v / 2147483648.0;
+    if (bit_depth <= 8)  return (double)v * (1.0 / 128.0);
+    if (bit_depth <= 16) return (double)v * (1.0 / 32768.0);
+    if (bit_depth <= 24) return (double)v * (1.0 / 8388608.0);
+    return (double)v * (1.0 / 2147483648.0);
 }
 
 /* Convert normalized [-1.0, 1.0] double to right-aligned clamped int32 at `bit_depth` */
@@ -91,9 +98,11 @@ int om_decoder_open_flac(const char *path, om_decoder_t *out_dec, char *err, siz
 int om_decoder_open_alac(const char *path, om_decoder_t *out_dec, char *err, size_t err_cap);
 int om_decoder_open_mp3(const char *path, om_decoder_t *out_dec, char *err, size_t err_cap);
 int om_decoder_open_dsd(const char *path, bool prefer_dop, om_decoder_t *out_dec, char *err, size_t err_cap);
+int om_decoder_open_dsd_ex(const char *path, om_dsd_mode_t dsd_mode, om_decoder_t *out_dec, char *err, size_t err_cap);
 
 /* Unified format dispatcher by file header magic + extension */
 int om_decoder_open_any(const char *path, bool prefer_dop, om_decoder_t *out_dec, char *err, size_t err_cap);
+int om_decoder_open_any_ex(const char *path, om_dsd_mode_t dsd_mode, om_decoder_t *out_dec, char *err, size_t err_cap);
 const char *om_codec_name(om_codec_id_t id);
 
 #endif /* OURMUSIC_AUDIO_FORMATS_H */

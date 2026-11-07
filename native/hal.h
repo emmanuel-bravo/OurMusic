@@ -14,10 +14,12 @@ typedef struct {
 
 typedef struct {
     uint32_t sample_rate;
+    uint32_t dsd_bit_rate;     /* Raw 1-bit DSD clock (e.g. 2822400..45158400) if is_dsd_native */
     uint16_t channels;
     uint16_t bit_depth;        /* 16, 24, or 32 */
-    bool     prefer_bitperfect;/* Request no OS resampling / WASAPI Exclusive */
+    bool     prefer_bitperfect;/* Request no OS resampling / WASAPI Exclusive / ASIO Direct */
     bool     use_float_output; /* True when DSP is active and float output is desired */
+    bool     is_dsd_native;    /* True to request ASIO Native 1-bit DSD Direct IoFormat */
 } om_hal_request_t;
 
 typedef struct {
@@ -27,14 +29,15 @@ typedef struct {
     uint16_t actual_channels;
     uint16_t actual_bit_depth;
     bool     actual_is_float;
+    bool     actual_is_dsd_native;
     bool     bit_perfect_active; /* True if rate matches & OS resampling bypassed */
     void    *priv;
 } om_hal_handle_t;
 
-/* Enumerate OS audio output devices (ALSA on Linux, WASAPI on Windows) */
+/* Enumerate OS audio output devices (ALSA on Linux, WASAPI + ASIO on Windows) */
 size_t om_hal_enumerate_devices(om_hal_device_info_t *out_list, size_t max_items);
 
-/* Open OS audio device or deterministic WAV/null sink (device_id = "null" or "wav:<path>") */
+/* Open OS audio device or deterministic WAV/null sink (device_id = "null", "wav:<path>", "asio:<driver>") */
 int  om_hal_open(const char *device_id, const om_hal_request_t *req, om_hal_handle_t *out, char *err, size_t err_cap);
 int  om_hal_write(om_hal_handle_t *h, const int32_t *pcm_i32, const double *pcm_f64, uint16_t src_bit_depth, size_t frames);
 void om_hal_drain(om_hal_handle_t *h);

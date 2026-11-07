@@ -1,5 +1,6 @@
 {
-  "enabled": true,
+  "enabled": false,
+  "peqMode": false,
   "numBands": 10,
   "preampDb": 0,
   "gains": [
@@ -14,9 +15,32 @@
     0,
     0
   ],
+  "peqBands": [],
   "smoothingEnabled": false,
   "limiterEnabled": true,
-  "customHookEnabled": false,
+  "customHookEnabled": true,
   "stereoWidth": 1,
+  "crossfeed": {
+    "enabled": false,
+    "cutoffHz": 700,
+    "feedDb": -6,
+    "itdUs": 260
+  },
+  "convolver": {
+    "enabled": false,
+    "irPath": "",
+    "mix": 1,
+    "gainDb": 0,
+    "autoNormalize": false
+  },
+  "replayGain": {
+    "mode": "off",
+    "preampDb": 0,
+    "preventClipping": true
+  },
+  "resampler": {
+    "targetRate": 0,
+    "quality": "high"
+  },
   "activePresetId": "flat"
 }

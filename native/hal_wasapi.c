@@ -8,6 +8,7 @@
 #endif
 
 #include "hal.h"
+#include "hal_asio.h"
 #include "os_compat.h"
 
 #ifdef OM_WASAPI_SYNTAX_CHECK
@@ -123,6 +124,9 @@ size_t om_hal_enumerate_devices(om_hal_device_info_t *out_list, size_t max_items
         IMMDeviceEnumerator_Release(enumerator);
     }
 
+    /* Enumerate installed native ASIO drivers from HKLM\SOFTWARE\ASIO */
+    count = om_asio_enumerate_devices(out_list, count, max_items > 1 ? max_items - 1 : max_items);
+
     if (count < max_items) {
         snprintf(out_list[count].id, sizeof(out_list[count].id), "null");
         snprintf(out_list[count].name, sizeof(out_list[count].name), "Null Timed Sink (Headless / Test)");
@@ -145,6 +149,9 @@ int om_hal_open(const char *device_id, const om_hal_request_t *req, om_hal_handl
     }
     if (strncmp(dev_id, "wavrt:", 6) == 0) {
         return om_wavsink_open(dev_id + 6, true, req, out, err, err_cap);
+    }
+    if (om_asio_is_device_id(dev_id)) {
+        return om_asio_open(dev_id, req, out, err, err_cap);
     }
 
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
@@ -306,6 +313,9 @@ int om_hal_open(const char *device_id, const om_hal_request_t *req, om_hal_handl
 
 int om_hal_write(om_hal_handle_t *h, const int32_t *pcm_i32, const double *pcm_f64, uint16_t src_bit_depth, size_t frames) {
     if (!h || !h->priv || frames == 0) return 0;
+    if (om_asio_is_handle(h)) {
+        return om_asio_write(h, pcm_i32, pcm_f64, src_bit_depth, frames);
+    }
     if (strcmp(h->device_id, "null") == 0 ||
         strcmp(h->backend_name, "WAV Bit-Exact Sink") == 0 ||
         strcmp(h->backend_name, "Null Timed Sink") == 0) {
@@ -385,6 +395,10 @@ int om_hal_write(om_hal_handle_t *h, const int32_t *pcm_i32, const double *pcm_f
 
 void om_hal_drain(om_hal_handle_t *h) {
     if (!h || !h->priv) return;
+    if (om_asio_is_handle(h)) {
+        om_asio_drain(h);
+        return;
+    }
     if (strcmp(h->device_id, "null") == 0 ||
         strcmp(h->backend_name, "WAV Bit-Exact Sink") == 0 ||
         strcmp(h->backend_name, "Null Timed Sink") == 0) return;
@@ -401,6 +415,10 @@ void om_hal_drain(om_hal_handle_t *h) {
 
 void om_hal_drop(om_hal_handle_t *h) {
     if (!h || !h->priv) return;
+    if (om_asio_is_handle(h)) {
+        om_asio_drop(h);
+        return;
+    }
     if (strcmp(h->device_id, "null") == 0 ||
         strcmp(h->backend_name, "WAV Bit-Exact Sink") == 0 ||
         strcmp(h->backend_name, "Null Timed Sink") == 0) return;
@@ -414,6 +432,10 @@ void om_hal_drop(om_hal_handle_t *h) {
 
 void om_hal_close(om_hal_handle_t *h) {
     if (!h || !h->priv) return;
+    if (om_asio_is_handle(h)) {
+        om_asio_close(h);
+        return;
+    }
     if (strcmp(h->device_id, "null") == 0 ||
         strcmp(h->backend_name, "WAV Bit-Exact Sink") == 0 ||
         strcmp(h->backend_name, "Null Timed Sink") == 0) {

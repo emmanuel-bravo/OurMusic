@@ -7,6 +7,7 @@ build:
 
 wasapi-check:
 	gcc -fsyntax-only -Wall -Wextra -Wno-unused-parameter -std=c11 -D_POSIX_C_SOURCE=200809L -DOM_WASAPI_SYNTAX_CHECK native/hal_wasapi.c
+	gcc -fsyntax-only -Wall -Wextra -Wno-unused-parameter -std=c11 -D_POSIX_C_SOURCE=200809L -DOM_WASAPI_SYNTAX_CHECK native/hal_asio.c
 
 start: build
 	node src/index.mjs

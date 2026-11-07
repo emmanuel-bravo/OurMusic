@@ -50,19 +50,23 @@ function findFolderCover(filePath) {
 
 /**
  * Unified Metadata Analyzer (Tag Parser) — reads embedded tags, synced lyrics, cover art,
- * and exact stream parameters across FLAC (Vorbis), M4A/ALAC (MP4 ilst), and MP3/WAV/DSF (ID3v2).
+ * ReplayGain 2.0 / EBU R128 loudness tags, and exact stream parameters across FLAC (Vorbis),
+ * M4A/ALAC (MP4 ilst), and MP3/WAV/DSF (ID3v2) using O(metadata) header-only slices.
  */
-export async function readMetadata(filePath, { probeAudio = true, engineBridge = null } = {}) {
+export async function readMetadata(
+  filePath,
+  { probeAudio = true, engineBridge = null, includeCoverArt = true } = {},
+) {
   const absPath = path.resolve(filePath);
   const backend = detectTagBackend(absPath);
 
   let rawTags;
   if (backend === 'flac') {
-    rawTags = readFlacTags(absPath);
+    rawTags = readFlacTags(absPath, { includeCoverArt });
   } else if (backend === 'mp4') {
-    rawTags = readMp4Tags(absPath);
+    rawTags = readMp4Tags(absPath, { includeCoverArt });
   } else if (backend === 'id3') {
-    rawTags = readId3File(absPath);
+    rawTags = readId3File(absPath, { includeCoverArt });
   } else {
     rawTags = {
       tagFormat: 'DSDIFF / Sidecar',
@@ -76,10 +80,13 @@ export async function readMetadata(filePath, { probeAudio = true, engineBridge =
       lyrics: '',
       syncedLyrics: [],
       coverArt: null,
+      replayGainTrackDb: null,
+      replayGainTrackPeak: null,
+      replayGainAlbumDb: null,
+      replayGainAlbumPeak: null,
     };
   }
 
-  // Fallback to .lrc sidecar when embedded lyrics are empty
   if (!rawTags.lyrics && rawTags.syncedLyrics.length === 0) {
     const side = findSidecarLyrics(absPath);
     if (side) {
@@ -88,7 +95,7 @@ export async function readMetadata(filePath, { probeAudio = true, engineBridge =
     }
   }
 
-  if (!rawTags.coverArt) {
+  if (includeCoverArt && !rawTags.coverArt) {
     const folderCover = findFolderCover(absPath);
     if (folderCover) rawTags.coverArt = folderCover;
   }
@@ -120,12 +127,16 @@ export async function readMetadata(filePath, { probeAudio = true, engineBridge =
     lyrics: rawTags.lyrics || '',
     syncedLyrics: rawTags.syncedLyrics || [],
     coverArt: rawTags.coverArt,
+    replayGainTrackDb: rawTags.replayGainTrackDb ?? null,
+    replayGainTrackPeak: rawTags.replayGainTrackPeak ?? null,
+    replayGainAlbumDb: rawTags.replayGainAlbumDb ?? null,
+    replayGainAlbumPeak: rawTags.replayGainAlbumPeak ?? null,
     audio: streamInfo,
   };
 }
 
 /**
- * Unified Metadata Writer — updates embedded tags, synchronized lyrics, and cover art
+ * Unified Metadata Writer — updates embedded tags, synchronized lyrics, ReplayGain, and cover art
  * directly inside FLAC (Vorbis+PICTURE), M4A/ALAC (MP4 ilst), and MP3/WAV/DSF (ID3v2.4).
  */
 export async function writeMetadata(filePath, patch = {}) {
@@ -133,7 +144,6 @@ export async function writeMetadata(filePath, patch = {}) {
   const backend = detectTagBackend(absPath);
   const current = await readMetadata(absPath, { probeAudio: false });
 
-  // Do not embed an external folder cover unless explicitly replaced or already embedded
   let coverArt = current.coverArt && !current.coverArt.external ? current.coverArt : null;
   if (patch.coverArt === null) {
     coverArt = null;
@@ -162,6 +172,14 @@ export async function writeMetadata(filePath, patch = {}) {
     lyrics,
     syncedLyrics,
     coverArt,
+    replayGainTrackDb:
+      patch.replayGainTrackDb !== undefined ? patch.replayGainTrackDb : current.replayGainTrackDb,
+    replayGainTrackPeak:
+      patch.replayGainTrackPeak !== undefined ? patch.replayGainTrackPeak : current.replayGainTrackPeak,
+    replayGainAlbumDb:
+      patch.replayGainAlbumDb !== undefined ? patch.replayGainAlbumDb : current.replayGainAlbumDb,
+    replayGainAlbumPeak:
+      patch.replayGainAlbumPeak !== undefined ? patch.replayGainAlbumPeak : current.replayGainAlbumPeak,
   };
 
   if (backend === 'flac') {
@@ -171,7 +189,6 @@ export async function writeMetadata(filePath, patch = {}) {
   } else if (backend === 'id3') {
     writeId3File(absPath, merged);
   } else if (backend === 'dff') {
-    // DSDIFF uses sidecar .lrc for lyrics
     if (lyrics) {
       const parsed = path.parse(absPath);
       fs.writeFileSync(path.join(parsed.dir, `${parsed.name}.lrc`), lyrics, 'utf8');

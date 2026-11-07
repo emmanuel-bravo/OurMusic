@@ -3,6 +3,15 @@ import path from 'node:path';
 
 export const BAND_FREQS_5 = [60, 230, 910, 3600, 14000];
 export const BAND_FREQS_10 = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+export const VALID_PEQ_TYPES = new Set([
+  'peaking',
+  'low_shelf',
+  'high_shelf',
+  'low_pass',
+  'high_pass',
+  'notch',
+  'all_pass',
+]);
 
 const BUILTIN_PROFILES = [
   {
@@ -55,10 +64,10 @@ const BUILTIN_PROFILES = [
   },
 ];
 
-function clampGain(v) {
+function clampGain(v, maxAbs = 15) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
-  return Math.max(-15, Math.min(15, Math.round(n * 100) / 100));
+  return Math.max(-maxAbs, Math.min(maxAbs, Math.round(n * 100) / 100));
 }
 
 function clampPreamp(v) {
@@ -67,8 +76,22 @@ function clampPreamp(v) {
   return Math.max(-18, Math.min(18, Math.round(n * 100) / 100));
 }
 
+function normalizePeqBands(bands = []) {
+  if (!Array.isArray(bands)) return [];
+  return bands.slice(0, 16).map((b) => {
+    const rawType = String(b?.type || 'peaking').toLowerCase();
+    return {
+      enabled: b?.enabled !== false,
+      type: VALID_PEQ_TYPES.has(rawType) ? rawType : 'peaking',
+      freq: Math.max(10, Math.min(24000, Number(b?.freq) || 1000)),
+      q: Math.max(0.1, Math.min(24.0, Number(b?.q) || 0.7071)),
+      gainDb: clampGain(b?.gainDb, 24),
+    };
+  });
+}
+
 function interpolateGains(srcGains, targetBands) {
-  if (srcGains.length === targetBands) return srcGains.map(clampGain);
+  if (srcGains.length === targetBands) return srcGains.map((g) => clampGain(g, 15));
   if (srcGains.length === 5 && targetBands === 10) {
     return [
       srcGains[0],
@@ -81,7 +104,7 @@ function interpolateGains(srcGains, targetBands) {
       srcGains[3],
       (srcGains[3] + srcGains[4]) / 2,
       srcGains[4],
-    ].map(clampGain);
+    ].map((g) => clampGain(g, 15));
   }
   if (srcGains.length === 10 && targetBands === 5) {
     return [
@@ -90,17 +113,19 @@ function interpolateGains(srcGains, targetBands) {
       (srcGains[4] + srcGains[5]) / 2,
       (srcGains[6] + srcGains[7]) / 2,
       (srcGains[8] + srcGains[9]) / 2,
-    ].map(clampGain);
+    ].map((g) => clampGain(g, 15));
   }
   const res = new Array(targetBands).fill(0);
   for (let i = 0; i < Math.min(res.length, srcGains.length); i++) {
-    res[i] = clampGain(srcGains[i]);
+    res[i] = clampGain(srcGains[i], 15);
   }
   return res;
 }
 
 /**
- * Equalizer Preset Manager — stores and retrieves classic and custom EQ configurations in JSON.
+ * Equalizer & Audiophile DSP State Manager — stores classic/custom Graphic EQ presets,
+ * 16-band Parametric EQ (PEQ), Headphone Crossfeed, Partitioned FFT Convolver,
+ * ReplayGain 2.0 / R128 normalization, and Polyphase Sinc Resampler settings.
  */
 export class PresetManager {
   constructor(dataDir) {
@@ -110,13 +135,37 @@ export class PresetManager {
     this.customPresets = [];
     this.activeState = {
       enabled: false,
+      peqMode: false,
       numBands: 5,
       preampDb: 0.0,
       gains: [0, 0, 0, 0, 0],
+      peqBands: [],
       smoothingEnabled: true,
       limiterEnabled: true,
       customHookEnabled: false,
       stereoWidth: 1.0,
+      crossfeed: {
+        enabled: false,
+        cutoffHz: 700,
+        feedDb: -6.0,
+        itdUs: 260,
+      },
+      convolver: {
+        enabled: false,
+        irPath: '',
+        mix: 1.0,
+        gainDb: 0.0,
+        autoNormalize: false,
+      },
+      replayGain: {
+        mode: 'off',
+        preampDb: 0.0,
+        preventClipping: true,
+      },
+      resampler: {
+        targetRate: 0,
+        quality: 'high',
+      },
       activePresetId: 'flat',
     };
     this._load();
@@ -141,8 +190,16 @@ export class PresetManager {
           ...this.activeState,
           ...st,
           numBands: st.numBands === 10 ? 10 : 5,
+          peqBands: normalizePeqBands(st.peqBands),
+          crossfeed: { ...this.activeState.crossfeed, ...(st.crossfeed || {}) },
+          convolver: { ...this.activeState.convolver, ...(st.convolver || {}) },
+          replayGain: { ...this.activeState.replayGain, ...(st.replayGain || {}) },
+          resampler: { ...this.activeState.resampler, ...(st.resampler || {}) },
         };
-        this.activeState.gains = interpolateGains(this.activeState.gains || [], this.activeState.numBands);
+        this.activeState.gains = interpolateGains(
+          this.activeState.gains || [],
+          this.activeState.numBands,
+        );
       } catch {
         // Keep clean defaults
       }
@@ -154,12 +211,13 @@ export class PresetManager {
     fs.writeFileSync(
       this.filePath,
       JSON.stringify({ version: 1, presets: this.customPresets }, null, 2),
-      'utf8'
+      'utf8',
     );
   }
 
   saveActiveState(patch = {}) {
     if (typeof patch.enabled === 'boolean') this.activeState.enabled = patch.enabled;
+    if (typeof patch.peqMode === 'boolean') this.activeState.peqMode = patch.peqMode;
     if (patch.numBands === 5 || patch.numBands === 10) {
       if (patch.numBands !== this.activeState.numBands && !Array.isArray(patch.gains)) {
         this.activeState.gains = interpolateGains(this.activeState.gains, patch.numBands);
@@ -169,6 +227,9 @@ export class PresetManager {
     if (typeof patch.preampDb === 'number') this.activeState.preampDb = clampPreamp(patch.preampDb);
     if (Array.isArray(patch.gains)) {
       this.activeState.gains = interpolateGains(patch.gains, this.activeState.numBands);
+    }
+    if (Array.isArray(patch.peqBands)) {
+      this.activeState.peqBands = normalizePeqBands(patch.peqBands);
     }
     if (typeof patch.smoothingEnabled === 'boolean') {
       this.activeState.smoothingEnabled = patch.smoothingEnabled;
@@ -181,6 +242,68 @@ export class PresetManager {
     }
     if (typeof patch.stereoWidth === 'number') {
       this.activeState.stereoWidth = Math.max(0, Math.min(2, patch.stereoWidth));
+    }
+    if (patch.crossfeed && typeof patch.crossfeed === 'object') {
+      this.activeState.crossfeed = {
+        enabled:
+          typeof patch.crossfeed.enabled === 'boolean'
+            ? patch.crossfeed.enabled
+            : this.activeState.crossfeed.enabled,
+        cutoffHz: Math.max(
+          300,
+          Math.min(2000, Number(patch.crossfeed.cutoffHz ?? this.activeState.crossfeed.cutoffHz)),
+        ),
+        feedDb: Math.max(
+          -15,
+          Math.min(0, Number(patch.crossfeed.feedDb ?? this.activeState.crossfeed.feedDb)),
+        ),
+        itdUs: Math.max(
+          0,
+          Math.min(650, Number(patch.crossfeed.itdUs ?? this.activeState.crossfeed.itdUs)),
+        ),
+      };
+    }
+    if (patch.convolver && typeof patch.convolver === 'object') {
+      this.activeState.convolver = {
+        enabled:
+          typeof patch.convolver.enabled === 'boolean'
+            ? patch.convolver.enabled
+            : this.activeState.convolver.enabled,
+        irPath:
+          typeof patch.convolver.irPath === 'string'
+            ? patch.convolver.irPath
+            : this.activeState.convolver.irPath,
+        mix: Math.max(0, Math.min(1, Number(patch.convolver.mix ?? this.activeState.convolver.mix))),
+        gainDb: Math.max(
+          -24,
+          Math.min(12, Number(patch.convolver.gainDb ?? this.activeState.convolver.gainDb)),
+        ),
+        autoNormalize:
+          typeof patch.convolver.autoNormalize === 'boolean'
+            ? patch.convolver.autoNormalize
+            : this.activeState.convolver.autoNormalize,
+      };
+    }
+    if (patch.replayGain && typeof patch.replayGain === 'object') {
+      const m = String(patch.replayGain.mode ?? this.activeState.replayGain.mode).toLowerCase();
+      this.activeState.replayGain = {
+        mode: ['off', 'track', 'album'].includes(m) ? m : 'off',
+        preampDb: clampPreamp(patch.replayGain.preampDb ?? this.activeState.replayGain.preampDb),
+        preventClipping:
+          typeof patch.replayGain.preventClipping === 'boolean'
+            ? patch.replayGain.preventClipping
+            : this.activeState.replayGain.preventClipping,
+      };
+    }
+    if (patch.resampler && typeof patch.resampler === 'object') {
+      const q = String(patch.resampler.quality ?? this.activeState.resampler.quality).toLowerCase();
+      this.activeState.resampler = {
+        targetRate: Math.max(
+          0,
+          Math.round(Number(patch.resampler.targetRate ?? this.activeState.resampler.targetRate) || 0),
+        ),
+        quality: ['fast', 'high', 'ultra'].includes(q) ? q : 'high',
+      };
     }
     if (typeof patch.activePresetId === 'string') {
       this.activeState.activePresetId = patch.activePresetId;
@@ -197,6 +320,11 @@ export class PresetManager {
       ...this.activeState,
       bandFreqs: [...freqs],
       gains: [...this.activeState.gains],
+      peqBands: this.activeState.peqBands.map((b) => ({ ...b })),
+      crossfeed: { ...this.activeState.crossfeed },
+      convolver: { ...this.activeState.convolver },
+      replayGain: { ...this.activeState.replayGain },
+      resampler: { ...this.activeState.resampler },
     };
   }
 
@@ -292,7 +420,7 @@ export class PresetManager {
         smoothingEnabled: this.activeState.smoothingEnabled,
       },
       null,
-      2
+      2,
     );
   }
 

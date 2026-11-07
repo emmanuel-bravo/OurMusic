@@ -288,11 +288,12 @@ const DEFAULT_SMART_PLAYLISTS = [
  * M3U/PLS/XSPF Import/Export, and Rule-Based Smart Playlists.
  */
 export class PlaylistManager extends EventEmitter {
-  constructor({ dataDir, libraryManager, engineBridge }) {
+  constructor({ dataDir, libraryManager, engineBridge, presetManager = null }) {
     super();
     this.dataDir = dataDir;
     this.library = libraryManager;
     this.engine = engineBridge;
+    this.presets = presetManager;
     this.filePath = path.join(dataDir, 'playlists.json');
 
     this.playlists = []; // [{ id, name, trackPaths, updatedAt }]
@@ -356,6 +357,8 @@ export class PlaylistManager extends EventEmitter {
           const found = this.queue.findIndex((item) => item.filePath === ev.path);
           if (found >= 0) this.currentIndex = found;
         }
+        const cur = this.queue[this.currentIndex];
+        if (cur) this._pushTrackReplayGain(cur).catch(() => {});
         this._armGaplessNext().catch(() => {});
         this.emit('queue_updated', this.getQueueState());
       }
@@ -446,6 +449,21 @@ export class PlaylistManager extends EventEmitter {
     return this.playIndex(idx);
   }
 
+  async _pushTrackReplayGain(track) {
+    if (!this.engine || !this.engine.ready || !track) return;
+    await this.engine.setReplayGain({
+      trackGainDb: Number.isFinite(track.replayGainTrackDb) ? track.replayGainTrackDb : 0.0,
+      trackPeak: Number.isFinite(track.replayGainTrackPeak) && track.replayGainTrackPeak > 0 ? track.replayGainTrackPeak : 1.0,
+      albumGainDb: Number.isFinite(track.replayGainAlbumDb)
+        ? track.replayGainAlbumDb
+        : (Number.isFinite(track.replayGainTrackDb) ? track.replayGainTrackDb : 0.0),
+      albumPeak:
+        Number.isFinite(track.replayGainAlbumPeak) && track.replayGainAlbumPeak > 0
+          ? track.replayGainAlbumPeak
+          : (Number.isFinite(track.replayGainTrackPeak) && track.replayGainTrackPeak > 0 ? track.replayGainTrackPeak : 1.0),
+    });
+  }
+
   async playIndex(index) {
     if (index < 0 || index >= this.queue.length) {
       throw new Error('Índice de cola fuera de rango');
@@ -456,6 +474,7 @@ export class PlaylistManager extends EventEmitter {
     const nextTrack = nextIdx >= 0 ? this.queue[nextIdx] : null;
 
     if (this.engine && this.engine.ready) {
+      await this._pushTrackReplayGain(current);
       await this.engine.play(current.filePath, nextTrack ? nextTrack.filePath : '');
     }
     this.emit('queue_updated', this.getQueueState());

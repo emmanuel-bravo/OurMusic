@@ -8,6 +8,20 @@ function makeBox(typeStr, payloadBuf) {
   return Buffer.concat([hdr, payloadBuf]);
 }
 
+function parseGainDb(raw) {
+  if (raw === undefined || raw === null) return null;
+  const m = String(raw).trim().match(/^([+-]?\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const v = Number(m[1]);
+  return Number.isFinite(v) ? v : null;
+}
+
+function parsePeakVal(raw) {
+  if (raw === undefined || raw === null) return null;
+  const v = Number(String(raw).trim());
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
 function listBoxes(buf, start = 0, end = buf.length) {
   const out = [];
   let pos = start;
@@ -42,7 +56,7 @@ function parseDataAtom(buf, bodyStart, bodyEnd) {
   if (!dataBox || dataBox.bodyStart + 8 > dataBox.bodyEnd) return null;
   const typeIndicator = buf.readUInt32BE(dataBox.bodyStart);
   const valBuf = buf.subarray(dataBox.bodyStart + 8, dataBox.bodyEnd);
-  return { typeIndicator, valBuf };
+  return { typeIndicator, valBuf, children };
 }
 
 function buildIlstTextItem(fourcc, value) {
@@ -50,10 +64,22 @@ function buildIlstTextItem(fourcc, value) {
   if (!str) return null;
   const utf8 = Buffer.from(str, 'utf8');
   const dataHdr = Buffer.alloc(8);
-  dataHdr.writeUInt32BE(1, 0); // 1 = UTF-8 text
-  dataHdr.writeUInt32BE(0, 4); // locale = 0
+  dataHdr.writeUInt32BE(1, 0);
+  dataHdr.writeUInt32BE(0, 4);
   const dataBox = makeBox('data', Buffer.concat([dataHdr, utf8]));
   return makeBox(fourcc, dataBox);
+}
+
+function buildIlstFreeformItem(name, value) {
+  const str = String(value ?? '').trim();
+  if (!str) return null;
+  const meanBox = makeBox('mean', Buffer.concat([Buffer.alloc(4, 0), Buffer.from('com.apple.iTunes', 'ascii')]));
+  const nameBox = makeBox('name', Buffer.concat([Buffer.alloc(4, 0), Buffer.from(name, 'utf8')]));
+  const dataHdr = Buffer.alloc(8);
+  dataHdr.writeUInt32BE(1, 0);
+  dataHdr.writeUInt32BE(0, 4);
+  const dataBox = makeBox('data', Buffer.concat([dataHdr, Buffer.from(str, 'utf8')]));
+  return makeBox('----', Buffer.concat([meanBox, nameBox, dataBox]));
 }
 
 function buildIlstTrackItem(trackStr) {
@@ -64,7 +90,7 @@ function buildIlstTrackItem(trackStr) {
   const tot = parts[1] ? parseInt(parts[1], 10) || 0 : 0;
   if (trk <= 0) return null;
   const payload = Buffer.alloc(16);
-  payload.writeUInt32BE(0, 0); // implicit binary type 0
+  payload.writeUInt32BE(0, 0);
   payload.writeUInt32BE(0, 4);
   payload.writeUInt16BE(0, 8);
   payload.writeUInt16BE(trk, 10);
@@ -77,14 +103,11 @@ function buildIlstCoverItem(coverArt) {
   if (!coverArt || !Buffer.isBuffer(coverArt.data) || coverArt.data.length === 0) return null;
   const isPng = String(coverArt.mime || '').toLowerCase().includes('png');
   const dataHdr = Buffer.alloc(8);
-  dataHdr.writeUInt32BE(isPng ? 14 : 13, 0); // 13 = JPEG, 14 = PNG
+  dataHdr.writeUInt32BE(isPng ? 14 : 13, 0);
   dataHdr.writeUInt32BE(0, 4);
   return makeBox('covr', makeBox('data', Buffer.concat([dataHdr, coverArt.data])));
 }
 
-/**
- * Shift all stco (32-bit) and co64 (64-bit) chunk offsets inside moov when moov precedes mdat.
- */
 function shiftMoovChunkOffsets(moovBuf, deltaBytes) {
   if (deltaBytes === 0) return;
   const CONTAINERS = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'edts', 'dinf']);
@@ -117,8 +140,11 @@ function shiftMoovChunkOffsets(moovBuf, deltaBytes) {
   walk(0, moovBuf.length);
 }
 
-export function readMp4Tags(filePath) {
-  const buf = fs.readFileSync(filePath);
+/**
+ * Atom-only O(moov) MP4/M4A tag reader: leaps over 'mdat' ALAC/AAC audio payloads
+ * and reads exclusively the 'moov' atom.
+ */
+export function readMp4Tags(filePath, { includeCoverArt = true } = {}) {
   const tags = {
     tagFormat: 'MP4 ilst (M4A/ALAC)',
     title: '',
@@ -131,29 +157,66 @@ export function readMp4Tags(filePath) {
     lyrics: '',
     syncedLyrics: [],
     coverArt: null,
+    replayGainTrackDb: null,
+    replayGainTrackPeak: null,
+    replayGainAlbumDb: null,
+    replayGainAlbumPeak: null,
   };
 
-  const top = listBoxes(buf, 0, buf.length);
-  const moov = top.find((b) => b.type === 'moov');
-  if (!moov) return tags;
+  let moovBuf = null;
+  let moovHdrLen = 8;
+  let fd = -1;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const fileSize = fs.fstatSync(fd).size;
+    let pos = 0;
+    const hdr = Buffer.allocUnsafe(16);
 
-  const moovChildren = listBoxes(buf, moov.bodyStart, moov.bodyEnd);
+    while (pos + 8 <= fileSize) {
+      const got = fs.readSync(fd, hdr, 0, Math.min(16, fileSize - pos), pos);
+      if (got < 8) break;
+      let sz = hdr.readUInt32BE(0);
+      const type = hdr.toString('latin1', 4, 8);
+      let hdrLen = 8;
+      if (sz === 1) {
+        if (got < 16) break;
+        sz = Number(hdr.readBigUInt64BE(8));
+        hdrLen = 16;
+      } else if (sz === 0) {
+        sz = fileSize - pos;
+      }
+      if (sz < hdrLen || pos + sz > fileSize) break;
+      if (type === 'moov') {
+        moovBuf = Buffer.allocUnsafe(sz);
+        if (fs.readSync(fd, moovBuf, 0, sz, pos) !== sz) moovBuf = null;
+        moovHdrLen = hdrLen;
+        break;
+      }
+      pos += sz;
+    }
+  } finally {
+    if (fd >= 0) fs.closeSync(fd);
+  }
+
+  if (!moovBuf) return tags;
+
+  const moovChildren = listBoxes(moovBuf, moovHdrLen, moovBuf.length);
   const udta = moovChildren.find((b) => b.type === 'udta');
   if (!udta) return tags;
 
-  const udtaChildren = listBoxes(buf, udta.bodyStart, udta.bodyEnd);
+  const udtaChildren = listBoxes(moovBuf, udta.bodyStart, udta.bodyEnd);
   const meta = udtaChildren.find((b) => b.type === 'meta');
   if (!meta || meta.bodyStart + 4 > meta.bodyEnd) return tags;
 
-  const metaChildren = listBoxes(buf, meta.bodyStart + 4, meta.bodyEnd);
+  const metaChildren = listBoxes(moovBuf, meta.bodyStart + 4, meta.bodyEnd);
   const ilst = metaChildren.find((b) => b.type === 'ilst');
   if (!ilst) return tags;
 
-  const items = listBoxes(buf, ilst.bodyStart, ilst.bodyEnd);
+  const items = listBoxes(moovBuf, ilst.bodyStart, ilst.bodyEnd);
   for (const item of items) {
-    const parsed = parseDataAtom(buf, item.bodyStart, item.bodyEnd);
+    const parsed = parseDataAtom(moovBuf, item.bodyStart, item.bodyEnd);
     if (!parsed) continue;
-    const { typeIndicator, valBuf } = parsed;
+    const { typeIndicator, valBuf, children } = parsed;
 
     if (item.type === '\xa9nam') tags.title = valBuf.toString('utf8');
     else if (item.type === '\xa9ART') tags.artist = valBuf.toString('utf8');
@@ -169,9 +232,23 @@ export function readMp4Tags(filePath) {
       const trk = valBuf.readUInt16BE(2);
       const tot = valBuf.length >= 6 ? valBuf.readUInt16BE(4) : 0;
       if (trk > 0) tags.trackNumber = tot > 0 ? `${trk}/${tot}` : String(trk);
-    } else if (item.type === 'covr' && valBuf.length > 0) {
+    } else if (item.type === 'covr' && includeCoverArt && valBuf.length > 0) {
       const mime = typeIndicator === 14 ? 'image/png' : 'image/jpeg';
       tags.coverArt = { mime, data: Buffer.from(valBuf) };
+    } else if (item.type === '----') {
+      const nameBox = children.find((c) => c.type === 'name');
+      if (nameBox && nameBox.bodyStart + 4 <= nameBox.bodyEnd) {
+        const key = moovBuf
+          .subarray(nameBox.bodyStart + 4, nameBox.bodyEnd)
+          .toString('utf8')
+          .trim()
+          .toUpperCase();
+        const val = valBuf.toString('utf8').trim();
+        if (key === 'REPLAYGAIN_TRACK_GAIN') tags.replayGainTrackDb = parseGainDb(val);
+        else if (key === 'REPLAYGAIN_TRACK_PEAK') tags.replayGainTrackPeak = parsePeakVal(val);
+        else if (key === 'REPLAYGAIN_ALBUM_GAIN') tags.replayGainAlbumDb = parseGainDb(val);
+        else if (key === 'REPLAYGAIN_ALBUM_PEAK') tags.replayGainAlbumPeak = parsePeakVal(val);
+      }
     }
   }
 
@@ -205,11 +282,22 @@ export function writeMp4Tags(filePath, mergedMeta) {
     buildIlstTrackItem(mergedMeta.trackNumber),
     buildIlstTextItem('\xa9lyr', lyricsStr),
     buildIlstCoverItem(mergedMeta.coverArt),
+    Number.isFinite(mergedMeta.replayGainTrackDb)
+      ? buildIlstFreeformItem('replaygain_track_gain', `${mergedMeta.replayGainTrackDb.toFixed(2)} dB`)
+      : null,
+    Number.isFinite(mergedMeta.replayGainTrackPeak)
+      ? buildIlstFreeformItem('replaygain_track_peak', mergedMeta.replayGainTrackPeak.toFixed(6))
+      : null,
+    Number.isFinite(mergedMeta.replayGainAlbumDb)
+      ? buildIlstFreeformItem('replaygain_album_gain', `${mergedMeta.replayGainAlbumDb.toFixed(2)} dB`)
+      : null,
+    Number.isFinite(mergedMeta.replayGainAlbumPeak)
+      ? buildIlstFreeformItem('replaygain_album_peak', mergedMeta.replayGainAlbumPeak.toFixed(6))
+      : null,
   ].filter(Boolean);
 
   const ilstBox = makeBox('ilst', Buffer.concat(ilstEntries));
 
-  // Standard MP4 'hdlr' inside 'meta' ('mdir' / 'appl')
   const hdlrPayload = Buffer.alloc(25);
   hdlrPayload.write('mdir', 8, 4, 'ascii');
   hdlrPayload.write('appl', 12, 4, 'ascii');
@@ -218,7 +306,6 @@ export function writeMp4Tags(filePath, mergedMeta) {
   const metaVerFlags = Buffer.alloc(4, 0);
   const metaBox = makeBox('meta', Buffer.concat([metaVerFlags, hdlrBox, ilstBox]));
 
-  // Keep any non-meta children inside existing udta
   const existingUdta = moovChildren.find((b) => b.type === 'udta');
   const keptUdtaParts = [];
   if (existingUdta) {
@@ -241,7 +328,6 @@ export function writeMp4Tags(filePath, mergedMeta) {
 
   const newMoovBuf = Buffer.from(makeBox('moov', Buffer.concat(newMoovParts)));
 
-  // If moov comes before mdat, adjust stco/co64 sample chunk offsets by exact byte delta!
   if (mdatIdx >= 0 && moovIdx < mdatIdx) {
     const delta = newMoovBuf.length - moov.size;
     shiftMoovChunkOffsets(newMoovBuf, delta);

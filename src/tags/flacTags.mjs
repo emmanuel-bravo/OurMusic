@@ -1,14 +1,36 @@
 import fs from 'node:fs';
 import { parseLrc, formatLrc } from './lrc.mjs';
 
+function parseGainDb(raw) {
+  if (raw === undefined || raw === null) return null;
+  const m = String(raw).trim().match(/^([+-]?\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const v = Number(m[1]);
+  return Number.isFinite(v) ? v : null;
+}
+
+function parseR128Q78Db(raw) {
+  if (raw === undefined || raw === null) return null;
+  const n = Number(String(raw).trim());
+  if (!Number.isFinite(n)) return null;
+  // R128_*_GAIN is Q7.8 fixed-point relative to -23 LUFS; ReplayGain 2.0 reference is -18 LUFS (+5 dB)
+  return n / 256.0 + 5.0;
+}
+
+function parsePeakVal(raw) {
+  if (raw === undefined || raw === null) return null;
+  const v = Number(String(raw).trim());
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
 function parseVorbisCommentBlock(body) {
   const fields = new Map();
-  if (!body || body.length < 8) return { vendor: 'OurMusic 1.0', fields };
+  if (!body || body.length < 8) return { vendor: 'OurMusic 2.0', fields };
 
   let pos = 0;
   const vendorLen = body.readUInt32LE(pos);
   pos += 4;
-  if (pos + vendorLen + 4 > body.length) return { vendor: 'OurMusic 1.0', fields };
+  if (pos + vendorLen + 4 > body.length) return { vendor: 'OurMusic 2.0', fields };
   const vendor = body.subarray(pos, pos + vendorLen).toString('utf8');
   pos += vendorLen;
 
@@ -32,7 +54,7 @@ function parseVorbisCommentBlock(body) {
 }
 
 function buildVorbisCommentBlock(vendor, entries) {
-  const vendorBytes = Buffer.from(vendor || 'OurMusic Clean-Room Tag Engine 1.0', 'utf8');
+  const vendorBytes = Buffer.from(vendor || 'OurMusic Clean-Room Tag Engine 2.0', 'utf8');
   const encodedComments = [];
 
   for (const [key, val] of entries) {
@@ -90,7 +112,6 @@ function buildPictureBlock(coverArt) {
   pos += mimeBytes.length;
   buf.writeUInt32BE(0, pos); // desc length = 0
   pos += 4;
-  // width=0, height=0, depth=0, colors=0 (16 bytes zero)
   pos += 16;
   buf.writeUInt32BE(data.length, pos);
   pos += 4;
@@ -98,8 +119,11 @@ function buildPictureBlock(coverArt) {
   return buf;
 }
 
-export function readFlacTags(filePath) {
-  const buf = fs.readFileSync(filePath);
+/**
+ * Header-only O(metadata) FLAC tag reader: reads only VorbisComment and Picture metadata blocks,
+ * never loading compressed FLAC audio frames into memory.
+ */
+export function readFlacTags(filePath, { includeCoverArt = true } = {}) {
   const tags = {
     tagFormat: 'VorbisComment (FLAC)',
     title: '',
@@ -112,39 +136,71 @@ export function readFlacTags(filePath) {
     lyrics: '',
     syncedLyrics: [],
     coverArt: null,
+    replayGainTrackDb: null,
+    replayGainTrackPeak: null,
+    replayGainAlbumDb: null,
+    replayGainAlbumPeak: null,
   };
 
-  if (buf.length < 8 || buf.toString('ascii', 0, 4) !== 'fLaC') {
-    return tags;
-  }
+  let fd = -1;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const fileSize = fs.fstatSync(fd).size;
+    if (fileSize < 8) return tags;
 
-  let pos = 4;
-  let isLast = false;
-  while (!isLast && pos + 4 <= buf.length) {
-    const hdr = buf[pos];
-    isLast = (hdr & 0x80) !== 0;
-    const blockType = hdr & 0x7f;
-    const blockLen = (buf[pos + 1] << 16) | (buf[pos + 2] << 8) | buf[pos + 3];
-    pos += 4;
-    if (pos + blockLen > buf.length) break;
-    const body = buf.subarray(pos, pos + blockLen);
-    pos += blockLen;
-
-    if (blockType === 4) {
-      const { fields } = parseVorbisCommentBlock(body);
-      tags.title = fields.get('TITLE') || '';
-      tags.artist = fields.get('ARTIST') || '';
-      tags.album = fields.get('ALBUM') || '';
-      tags.year = fields.get('DATE') || fields.get('YEAR') || '';
-      tags.composer = fields.get('COMPOSER') || '';
-      tags.genre = fields.get('GENRE') || '';
-      tags.trackNumber = fields.get('TRACKNUMBER') || '';
-      const lyr = fields.get('LYRICS') || fields.get('UNSYNCEDLYRICS') || '';
-      tags.lyrics = lyr;
-      tags.syncedLyrics = parseLrc(lyr);
-    } else if (blockType === 6 && !tags.coverArt) {
-      tags.coverArt = parsePictureBlock(body);
+    const magic = Buffer.allocUnsafe(4);
+    if (fs.readSync(fd, magic, 0, 4, 0) !== 4 || magic.toString('ascii', 0, 4) !== 'fLaC') {
+      return tags;
     }
+
+    let pos = 4;
+    let isLast = false;
+    const bhdr = Buffer.allocUnsafe(4);
+
+    while (!isLast && pos + 4 <= fileSize) {
+      if (fs.readSync(fd, bhdr, 0, 4, pos) !== 4) break;
+      const hdr = bhdr[0];
+      isLast = (hdr & 0x80) !== 0;
+      const blockType = hdr & 0x7f;
+      const blockLen = (bhdr[1] << 16) | (bhdr[2] << 8) | bhdr[3];
+      pos += 4;
+      if (pos + blockLen > fileSize) break;
+
+      if (blockType === 4) {
+        const body = Buffer.allocUnsafe(blockLen);
+        if (fs.readSync(fd, body, 0, blockLen, pos) === blockLen) {
+          const { fields } = parseVorbisCommentBlock(body);
+          tags.title = fields.get('TITLE') || '';
+          tags.artist = fields.get('ARTIST') || '';
+          tags.album = fields.get('ALBUM') || '';
+          tags.year = fields.get('DATE') || fields.get('YEAR') || '';
+          tags.composer = fields.get('COMPOSER') || '';
+          tags.genre = fields.get('GENRE') || '';
+          tags.trackNumber = fields.get('TRACKNUMBER') || '';
+          const lyr = fields.get('LYRICS') || fields.get('UNSYNCEDLYRICS') || '';
+          tags.lyrics = lyr;
+          tags.syncedLyrics = parseLrc(lyr);
+
+          tags.replayGainTrackDb =
+            parseGainDb(fields.get('REPLAYGAIN_TRACK_GAIN')) ??
+            parseR128Q78Db(fields.get('R128_TRACK_GAIN'));
+          tags.replayGainTrackPeak = parsePeakVal(fields.get('REPLAYGAIN_TRACK_PEAK'));
+          tags.replayGainAlbumDb =
+            parseGainDb(fields.get('REPLAYGAIN_ALBUM_GAIN')) ??
+            parseR128Q78Db(fields.get('R128_ALBUM_GAIN'));
+          tags.replayGainAlbumPeak = parsePeakVal(fields.get('REPLAYGAIN_ALBUM_PEAK'));
+        }
+      } else if (blockType === 6 && includeCoverArt && !tags.coverArt && blockLen > 0) {
+        const body = Buffer.allocUnsafe(blockLen);
+        if (fs.readSync(fd, body, 0, blockLen, pos) === blockLen) {
+          tags.coverArt = parsePictureBlock(body);
+        }
+      }
+
+      pos += blockLen;
+    }
+  } finally {
+    if (fd >= 0) fs.closeSync(fd);
   }
 
   return tags;
@@ -156,8 +212,8 @@ export function writeFlacTags(filePath, mergedMeta) {
     throw new Error('Archivo FLAC inválido: falta cabecera fLaC');
   }
 
-  const keptBlocks = []; // [{ type, body }]
-  let existingVendor = 'OurMusic Clean-Room Tag Engine 1.0';
+  const keptBlocks = [];
+  let existingVendor = 'OurMusic Clean-Room Tag Engine 2.0';
   const extraFields = new Map();
 
   let pos = 4;
@@ -198,9 +254,21 @@ export function writeFlacTags(filePath, mergedMeta) {
     } else if (blockType === 6 || blockType === 1) {
       // Drop old PICTURE and PADDING blocks; we emit fresh VORBIS_COMMENT + PICTURE
     } else {
-      // Keep STREAMINFO (0), APPLICATION (2), SEEKTABLE (3), CUESHEET (5) intact
       keptBlocks.push({ type: blockType, body });
     }
+  }
+
+  if (Number.isFinite(mergedMeta.replayGainTrackDb)) {
+    extraFields.set('REPLAYGAIN_TRACK_GAIN', `${mergedMeta.replayGainTrackDb.toFixed(2)} dB`);
+  }
+  if (Number.isFinite(mergedMeta.replayGainTrackPeak)) {
+    extraFields.set('REPLAYGAIN_TRACK_PEAK', mergedMeta.replayGainTrackPeak.toFixed(6));
+  }
+  if (Number.isFinite(mergedMeta.replayGainAlbumDb)) {
+    extraFields.set('REPLAYGAIN_ALBUM_GAIN', `${mergedMeta.replayGainAlbumDb.toFixed(2)} dB`);
+  }
+  if (Number.isFinite(mergedMeta.replayGainAlbumPeak)) {
+    extraFields.set('REPLAYGAIN_ALBUM_PEAK', mergedMeta.replayGainAlbumPeak.toFixed(6));
   }
 
   const audioFrames = buf.subarray(pos);

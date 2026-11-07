@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { readMetadata, writeMetadata } from '../tags/tagParser.mjs';
+import { EngineBridge } from '../engine/engineBridge.mjs';
 
 export const SUPPORTED_AUDIO_EXTENSIONS = new Set([
   '.flac',
@@ -15,13 +16,16 @@ export const SUPPORTED_AUDIO_EXTENSIONS = new Set([
   '.dff',
 ]);
 
+const SCAN_CONCURRENCY = 8;
+
 function makeTrackId(absPath) {
   return 'trk_' + crypto.createHash('sha1').update(absPath).digest('hex').slice(0, 16);
 }
 
 /**
- * Local Music Library Manager — performs non-blocking recursive directory scanning,
- * metadata indexing, cover art caching, fast search/filtering, and tag editing.
+ * Local Music Library Manager — performs bounded-concurrency parallel recursive directory scanning,
+ * O(metadata) header-only tag indexing, ITU-R BS.1770-4 / EBU R128 loudness analysis,
+ * cover art deduplication, fast search/filtering, and tag editing.
  */
 export class LibraryManager extends EventEmitter {
   constructor({ dataDir, engineBridge = null } = {}) {
@@ -170,6 +174,13 @@ export class LibraryManager extends EventEmitter {
       dsdBitRate,
       isLossless,
       isHiRes,
+      replayGainTrackDb: meta.replayGainTrackDb ?? existing?.replayGainTrackDb ?? null,
+      replayGainTrackPeak: meta.replayGainTrackPeak ?? existing?.replayGainTrackPeak ?? null,
+      replayGainAlbumDb: meta.replayGainAlbumDb ?? existing?.replayGainAlbumDb ?? null,
+      replayGainAlbumPeak: meta.replayGainAlbumPeak ?? existing?.replayGainAlbumPeak ?? null,
+      integratedLufs: existing?.integratedLufs ?? null,
+      loudnessRangeLu: existing?.loudnessRangeLu ?? null,
+      truePeakDbtp: existing?.truePeakDbtp ?? null,
       addedAt: existing?.addedAt || new Date().toISOString(),
     };
 
@@ -195,26 +206,38 @@ export class LibraryManager extends EventEmitter {
     this.scanProgress = { scanned: 0, total: files.length, currentFile: '' };
     this.emit('scan_started', { directory: absDir, total: files.length });
 
-    const indexed = [];
+    const indexed = new Array(files.length);
     const errors = [];
+    let cursor = 0;
+    let completed = 0;
 
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      this.scanProgress = { scanned: i, total: files.length, currentFile: path.basename(f) };
-      this.emit('scan_progress', { ...this.scanProgress });
-
-      try {
-        const rec = await this.indexSingleFile(f, { saveAfter: false });
-        indexed.push(rec);
-      } catch (err) {
-        errors.push({ file: f, error: err.message });
+    const workerCount = Math.min(SCAN_CONCURRENCY, Math.max(1, files.length));
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= files.length) break;
+        const f = files[idx];
+        try {
+          indexed[idx] = await this.indexSingleFile(f, { saveAfter: false });
+        } catch (err) {
+          errors.push({ file: f, error: err.message });
+        }
+        completed++;
+        this.scanProgress = {
+          scanned: completed,
+          total: files.length,
+          currentFile: path.basename(f),
+        };
+        if ((completed & 3) === 0 || completed === files.length) {
+          this.emit('scan_progress', { ...this.scanProgress });
+          await new Promise((r) => setImmediate(r));
+        }
       }
+    });
 
-      // Yield to event loop every 4 files to keep UI/HTTP 100% responsive
-      if ((i & 3) === 3) {
-        await new Promise((r) => setImmediate(r));
-      }
-    }
+    await Promise.all(workers);
+
+    const validIndexed = indexed.filter(Boolean);
 
     // Prune deleted files under absDir
     for (const [p, trk] of this.tracksByPath.entries()) {
@@ -229,14 +252,14 @@ export class LibraryManager extends EventEmitter {
     this._save();
     this.emit('scan_completed', {
       directory: absDir,
-      indexedCount: indexed.length,
+      indexedCount: validIndexed.length,
       totalLibraryTracks: this.tracksById.size,
       errors,
     });
 
     return {
       directory: absDir,
-      indexedCount: indexed.length,
+      indexedCount: validIndexed.length,
       totalLibraryTracks: this.tracksById.size,
       errors,
     };
@@ -377,10 +400,38 @@ export class LibraryManager extends EventEmitter {
     const trk = this.getTrack(trackId);
     if (!trk) throw new Error('Pista no encontrada en biblioteca');
     await writeMetadata(trk.filePath, patch);
-    // Force re-index by invalidating cached mtime
     trk.mtimeMs = 0;
     const updated = await this.indexSingleFile(trk.filePath, { saveAfter: true });
     this.emit('track_updated', updated);
     return this.getTrackFullMetadata(updated.id);
+  }
+
+  async analyzeTrackLoudness(trackId, { writeTags = false } = {}) {
+    const trk = this.getTrack(trackId);
+    if (!trk) throw new Error('Pista no encontrada en biblioteca');
+
+    const res = this.engineBridge
+      ? await this.engineBridge.scanLoudness(trk.filePath)
+      : await EngineBridge.scanLoudnessCli(trk.filePath);
+
+    trk.integratedLufs = res.integratedLufs;
+    trk.loudnessRangeLu = res.loudnessRangeLu;
+    trk.truePeakDbtp = res.truePeakDbtp;
+    trk.replayGainTrackDb = res.replayGain18Db;
+    trk.replayGainTrackPeak = res.truePeak;
+
+    if (writeTags) {
+      await writeMetadata(trk.filePath, {
+        replayGainTrackDb: res.replayGain18Db,
+        replayGainTrackPeak: res.truePeak,
+      });
+      const st = await fsp.stat(trk.filePath);
+      trk.mtimeMs = st.mtimeMs;
+      trk.sizeBytes = st.size;
+    }
+
+    this._save();
+    this.emit('track_updated', trk);
+    return { track: trk, loudness: res };
   }
 }

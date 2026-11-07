@@ -105,16 +105,29 @@ static inline bool flac_br_read_unary_zeros(flac_priv_t *f, uint32_t *out_q) {
     uint32_t q = 0;
     while (true) {
         if (f->bit_cnt == 0) {
-            if (!flac_br_refill(f, 8) && f->bit_cnt == 0) return false;
+            if (!flac_br_refill(f, 56) && f->bit_cnt == 0) return false;
         }
-        uint64_t bit = (f->bit_acc >> (f->bit_cnt - 1)) & 1ULL;
-        f->bit_cnt--;
-        if (bit == 1ULL) {
-            *out_q = q;
-            return true;
+        uint64_t top = f->bit_acc << (64 - f->bit_cnt);
+        if (top == 0) {
+            q += (uint32_t)f->bit_cnt;
+            f->bit_cnt = 0;
+            if (q > 1048576U) return false;
+            continue;
         }
-        q++;
+#if defined(__GNUC__) || defined(__clang__)
+        int lz = __builtin_clzll(top);
+#else
+        int lz = 0;
+        while ((top & (1ULL << 63)) == 0) {
+            top <<= 1;
+            lz++;
+        }
+#endif
+        q += (uint32_t)lz;
+        f->bit_cnt -= (lz + 1);
         if (q > 1048576U) return false;
+        *out_q = q;
+        return true;
     }
 }
 

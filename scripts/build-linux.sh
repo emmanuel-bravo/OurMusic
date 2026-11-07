@@ -4,12 +4,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "${ROOT_DIR}/bin"
 
-echo "[OurMusic] Compilando motor de audio C11 (ALSA + FLAC/ALAC/MP3/WAV/DSD + DSP Biquad 64-bit)..."
-gcc -O2 -Wall -Wextra -Wno-unused-parameter -std=c11 \
+echo "[OurMusic] Compilando motor de audio C11 optimizado (ALSA + FLAC/ALAC/MP3/WAV/DSD1024 + DSP 64-bit PEQ/SRC/Convolver/R128)..."
+gcc -O3 -fno-math-errno -fno-trapping-math -ftree-vectorize -funroll-loops \
+  -Wall -Wextra -Wno-unused-parameter -std=c11 \
   -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
   "${ROOT_DIR}/native/main_engine.c" \
   "${ROOT_DIR}/native/engine_core.c" \
   "${ROOT_DIR}/native/dsp_eq.c" \
+  "${ROOT_DIR}/native/dsp_resampler.c" \
+  "${ROOT_DIR}/native/dsp_convolver.c" \
+  "${ROOT_DIR}/native/dsp_loudness.c" \
   "${ROOT_DIR}/native/dec_dispatch.c" \
   "${ROOT_DIR}/native/dec_wav.c" \
   "${ROOT_DIR}/native/dec_flac.c" \

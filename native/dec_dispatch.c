@@ -14,7 +14,7 @@ const char *om_codec_name(om_codec_id_t id) {
     }
 }
 
-int om_decoder_open_any(const char *path, bool prefer_dop, om_decoder_t *out_dec, char *err, size_t err_cap) {
+int om_decoder_open_any_ex(const char *path, om_dsd_mode_t dsd_mode, om_decoder_t *out_dec, char *err, size_t err_cap) {
     if (!path || !out_dec) {
         if (err && err_cap) snprintf(err, err_cap, "Invalid decoder arguments");
         return -1;
@@ -40,7 +40,7 @@ int om_decoder_open_any(const char *path, bool prefer_dop, om_decoder_t *out_dec
         return om_decoder_open_flac(path, out_dec, err, err_cap);
     }
     if (memcmp(magic, "DSD ", 4) == 0 || memcmp(magic, "FRM8", 4) == 0) {
-        return om_decoder_open_dsd(path, prefer_dop, out_dec, err, err_cap);
+        return om_decoder_open_dsd_ex(path, dsd_mode, out_dec, err, err_cap);
     }
     if (got >= 8 && memcmp(magic + 4, "ftyp", 4) == 0) {
         return om_decoder_open_alac(path, out_dec, err, err_cap);
@@ -54,10 +54,14 @@ int om_decoder_open_any(const char *path, bool prefer_dop, om_decoder_t *out_dec
             return om_decoder_open_alac(path, out_dec, err, err_cap);
         }
         if (om_strcasecmp(ext, ".dsf") == 0 || om_strcasecmp(ext, ".dff") == 0) {
-            return om_decoder_open_dsd(path, prefer_dop, out_dec, err, err_cap);
+            return om_decoder_open_dsd_ex(path, dsd_mode, out_dec, err, err_cap);
         }
         if (om_strcasecmp(ext, ".mp3") == 0)  return om_decoder_open_mp3(path, out_dec, err, err_cap);
     }
 
     return om_decoder_open_mp3(path, out_dec, err, err_cap);
+}
+
+int om_decoder_open_any(const char *path, bool prefer_dop, om_decoder_t *out_dec, char *err, size_t err_cap) {
+    return om_decoder_open_any_ex(path, prefer_dop ? OM_DSD_MODE_DOP : OM_DSD_MODE_PCM, out_dec, err, err_cap);
 }

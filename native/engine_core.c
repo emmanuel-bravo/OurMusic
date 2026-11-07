@@ -24,23 +24,48 @@ static void json_escape_str(const char *in, char *out, size_t cap) {
     out[j] = '\0';
 }
 
+/* Wait until decoder_worker is not inside unlocked active_dec.read_frames() */
+static void wait_decoder_idle_unlocked(om_engine_t *eng) {
+    while (eng->dec_busy) {
+        om_cond_timedwait_ms(&eng->cond_can_push, &eng->lock, 2);
+    }
+}
+
+/* Flush ring buffer without disturbing an in-flight zero-copy output slot */
 static void ring_flush_unlocked(om_engine_t *eng) {
-    eng->ring_head = 0;
-    eng->ring_tail = 0;
+    if (eng->out_slot_in_use) {
+        eng->ring_head = (eng->ring_head + 1U) % OM_RING_SLOTS;
+    } else {
+        eng->ring_head = 0;
+    }
+    eng->ring_tail = eng->ring_head;
     eng->ring_count = 0;
     om_cond_broadcast(&eng->cond_can_push);
     om_cond_broadcast(&eng->cond_can_pop);
 }
 
-static void update_passive_meters(om_dsp_chain_t *dsp, const double *pcm, size_t frames, uint16_t channels) {
+static void update_passive_meters(om_dsp_chain_t *dsp, const double * restrict pcm, size_t frames, uint16_t channels) {
     double pl = 0.0, pr = 0.0, sl = 0.0, sr = 0.0;
-    for (size_t f = 0; f < frames; f++) {
-        double l = pcm[f * channels];
-        double r = (channels > 1) ? pcm[f * channels + 1] : l;
-        if (fabs(l) > pl) pl = fabs(l);
-        if (fabs(r) > pr) pr = fabs(r);
-        sl += l * l;
-        sr += r * r;
+    if (channels == 2) {
+        for (size_t f = 0; f < frames; f++) {
+            double l = pcm[f * 2U + 0];
+            double r = pcm[f * 2U + 1];
+            double al = fabs(l), ar = fabs(r);
+            if (al > pl) pl = al;
+            if (ar > pr) pr = ar;
+            sl += l * l;
+            sr += r * r;
+        }
+    } else {
+        for (size_t f = 0; f < frames; f++) {
+            double l = pcm[f * channels];
+            double r = (channels > 1) ? pcm[f * channels + 1] : l;
+            double al = fabs(l), ar = fabs(r);
+            if (al > pl) pl = al;
+            if (ar > pr) pr = ar;
+            sl += l * l;
+            sr += r * r;
+        }
     }
     om_mutex_lock(&dsp->lock);
     dsp->meters.peak_l = pl;
@@ -56,9 +81,11 @@ static void *decoder_worker(void *arg) {
 
     while (true) {
         om_mutex_lock(&eng->lock);
-        while (eng->running &&
-               (eng->state != OM_STATE_PLAYING || !eng->has_active_dec || eng->ring_count >= OM_RING_SLOTS)) {
-            if (!eng->running) break;
+        while (eng->running) {
+            size_t max_slots = eng->out_slot_in_use ? (OM_RING_SLOTS - 1U) : OM_RING_SLOTS;
+            if (eng->state == OM_STATE_PLAYING && eng->has_active_dec && eng->ring_count < max_slots) {
+                break;
+            }
             om_cond_timedwait_ms(&eng->cond_can_push, &eng->lock, 25);
         }
         if (!eng->running) {
@@ -87,10 +114,17 @@ static void *decoder_worker(void *arg) {
         slot->is_eof_marker = false;
         sent_track_start = true;
 
-        /* Decode chunk while holding decoder ownership; command changes check cmd_generation */
+        /* Mark decoder busy and release eng->lock so decoding runs 100% in parallel with output & IPC! */
+        eng->dec_busy = true;
+        om_mutex_unlock(&eng->lock);
+
         int got = eng->active_dec.read_frames(&eng->active_dec, slot->pcm_i32, slot->pcm_f64, OM_CHUNK_FRAMES);
 
-        if (eng->cmd_generation != gen_before) {
+        om_mutex_lock(&eng->lock);
+        eng->dec_busy = false;
+        om_cond_broadcast(&eng->cond_can_push);
+
+        if (eng->cmd_generation != gen_before || !eng->running) {
             om_mutex_unlock(&eng->lock);
             continue;
         }
@@ -136,7 +170,6 @@ static void *decoder_worker(void *arg) {
 
 static void *output_worker(void *arg) {
     om_engine_t *eng = (om_engine_t *)arg;
-    om_ring_slot_t local_slot;
 
     while (true) {
         om_mutex_lock(&eng->lock);
@@ -149,36 +182,67 @@ static void *output_worker(void *arg) {
             break;
         }
 
+        /* Claim zero-copy read pointer to ring[ring_head] without 98 KB memcpy! */
         uint64_t gen_before = eng->cmd_generation;
-        memcpy(&local_slot, &eng->ring[eng->ring_head], sizeof(local_slot));
-        eng->ring_head = (eng->ring_head + 1U) % OM_RING_SLOTS;
-        eng->ring_count--;
-        om_cond_signal(&eng->cond_can_push);
+        om_ring_slot_t *slot = &eng->ring[eng->ring_head];
+        eng->out_slot_in_use = true;
 
-        if (local_slot.is_eof_marker) {
+        if (slot->is_eof_marker) {
+            /* Advance ring immediately for EOF marker */
+            eng->ring_head = (eng->ring_head + 1U) % OM_RING_SLOTS;
+            eng->ring_count--;
+            eng->out_slot_in_use = false;
+            om_cond_signal(&eng->cond_can_push);
+
+            /* Flush any remaining Polyphase Kaiser-Sinc lookahead samples before draining HAL */
+            if (eng->hal_open && eng->resampler_active && eng->resampler.initialized) {
+                om_hal_handle_t hal_copy = eng->hal;
+                uint16_t last_bits = eng->playing_info.bit_depth ? eng->playing_info.bit_depth : 24;
+                om_mutex_unlock(&eng->lock);
+
+                double tail_buf[256 * OM_MAX_CHANNELS];
+                size_t tail_frames = om_resampler_flush_tail(&eng->resampler, tail_buf, 256U);
+                if (tail_frames > 0) {
+                    om_hal_write(&hal_copy, NULL, tail_buf, last_bits, tail_frames);
+                }
+                om_mutex_lock(&eng->lock);
+            }
+
             if (eng->hal_open) {
                 om_hal_drain(&eng->hal);
                 om_hal_close(&eng->hal);
                 eng->hal_open = false;
+                eng->last_requested_hal_rate = 0;
             }
+            eng->resampler_active = false;
             eng->state = OM_STATE_STOPPED;
             om_mutex_unlock(&eng->lock);
             emit_event(eng, "playback_ended", "{\"reason\":\"eof\"}");
             continue;
         }
 
-        bool dsp_bypass = om_dsp_can_bypass_bitperfect(&eng->dsp, local_slot.info.is_dop) &&
-                          eng->volume_unity && !local_slot.info.is_float;
-        bool want_bp_hw = eng->prefer_bitperfect_hw && dsp_bypass;
+        const bool is_raw_dsd = (slot->info.is_dop || slot->info.is_dsd_native);
+        const uint32_t target_rate = (!is_raw_dsd && eng->resampler_target_rate > 0)
+                                   ? eng->resampler_target_rate
+                                   : slot->info.sample_rate;
+        const om_src_quality_t src_qual = eng->resampler_quality;
+
+        bool dsp_stage_needed = !om_dsp_can_bypass_bitperfect(&eng->dsp, is_raw_dsd);
+        double vol = eng->volume_lin;
+        bool vol_unity = eng->volume_unity;
+
+        bool force_src_requested = (!is_raw_dsd && eng->resampler_target_rate > 0 &&
+                                    eng->resampler_target_rate != slot->info.sample_rate);
+        bool want_bp_hw = eng->prefer_bitperfect_hw && !dsp_stage_needed && !force_src_requested &&
+                          (is_raw_dsd || (vol_unity && !slot->info.is_float));
 
         bool need_reopen = !eng->hal_open ||
-                           eng->hal.actual_rate != local_slot.info.sample_rate ||
-                           eng->hal.actual_channels != local_slot.info.channels;
+                           eng->hal.actual_channels != slot->info.channels ||
+                           eng->hal.actual_is_dsd_native != slot->info.is_dsd_native ||
+                           (eng->hal.actual_rate != target_rate && eng->last_requested_hal_rate != target_rate);
 
         char dev_id[1024];
         snprintf(dev_id, sizeof(dev_id), "%s", eng->req_device_id);
-        double vol = eng->volume_lin;
-        bool vol_unity = eng->volume_unity;
         om_mutex_unlock(&eng->lock);
 
         if (need_reopen) {
@@ -189,11 +253,14 @@ static void *output_worker(void *arg) {
                 eng->hal_open = false;
             }
             om_hal_request_t req;
-            req.sample_rate = local_slot.info.sample_rate;
-            req.channels = local_slot.info.channels;
-            req.bit_depth = local_slot.info.bit_depth;
+            memset(&req, 0, sizeof(req));
+            req.sample_rate = target_rate;
+            req.dsd_bit_rate = slot->info.dsd_bit_rate;
+            req.channels = slot->info.channels;
+            req.bit_depth = slot->info.bit_depth;
             req.prefer_bitperfect = want_bp_hw;
-            req.use_float_output = !dsp_bypass;
+            req.use_float_output = !want_bp_hw;
+            req.is_dsd_native = slot->info.is_dsd_native;
 
             char hal_err[256] = {0};
             if (om_hal_open(dev_id, &req, &eng->hal, hal_err, sizeof(hal_err)) != 0) {
@@ -201,26 +268,31 @@ static void *output_worker(void *arg) {
                 om_hal_open("null", &req, &eng->hal, hal_err, sizeof(hal_err));
             }
             eng->hal_open = true;
-            om_dsp_configure_stream(&eng->dsp, local_slot.info.sample_rate, local_slot.info.channels);
+            eng->last_requested_hal_rate = target_rate;
+            om_dsp_configure_stream(&eng->dsp, slot->info.sample_rate, slot->info.channels);
+            om_resampler_reset(&eng->resampler);
             om_mutex_unlock(&eng->lock);
         }
 
         /* Gapless track transition detection without closing HAL when format matches */
         om_mutex_lock(&eng->lock);
-        if (strcmp(eng->playing_path, local_slot.path) != 0) {
+        uint32_t actual_hal_rate = eng->hal_open ? eng->hal.actual_rate : target_rate;
+        if (strcmp(eng->playing_path, slot->path) != 0) {
             bool was_playing_prev = (eng->playing_path[0] != '\0' && !need_reopen);
-            snprintf(eng->playing_path, sizeof(eng->playing_path), "%s", local_slot.path);
-            eng->playing_info = local_slot.info;
+            snprintf(eng->playing_path, sizeof(eng->playing_path), "%s", slot->path);
+            eng->playing_info = slot->info;
             if (was_playing_prev) {
                 eng->gapless_transitions++;
             }
             char esc_path[2048];
-            json_escape_str(local_slot.path, esc_path, sizeof(esc_path));
+            json_escape_str(slot->path, esc_path, sizeof(esc_path));
             char ev_buf[2400];
             snprintf(ev_buf, sizeof(ev_buf),
-                     "{\"path\":\"%s\",\"sampleRate\":%u,\"bitDepth\":%u,\"channels\":%u,\"codec\":\"%s\",\"gapless\":%s}",
-                     esc_path, local_slot.info.sample_rate, local_slot.info.bit_depth,
-                     local_slot.info.channels, om_codec_name(local_slot.info.codec),
+                     "{\"path\":\"%s\",\"sampleRate\":%u,\"bitDepth\":%u,\"channels\":%u,\"codec\":\"%s\",\"isDop\":%s,\"isDsdNative\":%s,\"gapless\":%s}",
+                     esc_path, slot->info.sample_rate, slot->info.bit_depth,
+                     slot->info.channels, om_codec_name(slot->info.codec),
+                     slot->info.is_dop ? "true" : "false",
+                     slot->info.is_dsd_native ? "true" : "false",
                      was_playing_prev ? "true" : "false");
             om_mutex_unlock(&eng->lock);
             emit_event(eng, "track_started", ev_buf);
@@ -228,39 +300,87 @@ static void *output_worker(void *arg) {
             om_mutex_unlock(&eng->lock);
         }
 
-        /* Process DSP or Bit-Perfect passthrough */
-        if (dsp_bypass) {
-            update_passive_meters(&eng->dsp, local_slot.pcm_f64, local_slot.frames, local_slot.info.channels);
+        const bool need_src = (!is_raw_dsd && actual_hal_rate > 0 && actual_hal_rate != slot->info.sample_rate);
+        const bool pure_bitperfect_passthrough = is_raw_dsd ||
+            (!need_src && !dsp_stage_needed && vol_unity && !slot->info.is_float);
+
+        /* Execute Bit-Perfect passthrough OR 64-bit DSP + Polyphase Sinc SRC pipeline */
+        if (pure_bitperfect_passthrough) {
+            if (!slot->info.is_dsd_native) {
+                update_passive_meters(&eng->dsp, slot->pcm_f64, slot->frames, slot->info.channels);
+            }
             om_mutex_lock(&eng->lock);
             if (eng->cmd_generation == gen_before && eng->hal_open) {
+                eng->resampler_active = false;
                 eng->signal_bitperfect = eng->hal.bit_perfect_active;
-                eng->played_frame_idx = local_slot.start_frame_idx + local_slot.frames;
+                eng->played_frame_idx = slot->start_frame_idx + slot->frames;
                 om_hal_handle_t hal_copy = eng->hal;
                 om_mutex_unlock(&eng->lock);
-                om_hal_write(&hal_copy, local_slot.pcm_i32, NULL, local_slot.info.bit_depth, local_slot.frames);
-            } else {
-                om_mutex_unlock(&eng->lock);
+
+                om_hal_write(&hal_copy, slot->pcm_i32, NULL, slot->info.bit_depth, slot->frames);
+
+                om_mutex_lock(&eng->lock);
             }
         } else {
-            if (!vol_unity && !local_slot.info.is_dop) {
-                size_t tot = local_slot.frames * local_slot.info.channels;
-                for (size_t i = 0; i < tot; i++) local_slot.pcm_f64[i] *= vol;
+            if (!vol_unity && !is_raw_dsd) {
+                size_t tot = slot->frames * slot->info.channels;
+                for (size_t i = 0; i < tot; i++) slot->pcm_f64[i] *= vol;
             }
-            if (!local_slot.info.is_dop) {
-                om_dsp_process(&eng->dsp, local_slot.pcm_f64, local_slot.frames,
-                               local_slot.info.channels, local_slot.info.sample_rate);
+
+            if (dsp_stage_needed) {
+                om_dsp_process(&eng->dsp, slot->pcm_f64, slot->frames,
+                               slot->info.channels, slot->info.sample_rate);
+            } else {
+                update_passive_meters(&eng->dsp, slot->pcm_f64, slot->frames, slot->info.channels);
             }
+
+            const double *out_f64_ptr = slot->pcm_f64;
+            size_t out_frames_cnt = slot->frames;
+
+            if (need_src) {
+                if (om_resampler_configure(&eng->resampler, slot->info.sample_rate,
+                                           actual_hal_rate, slot->info.channels, src_qual) == 0) {
+                    size_t need_cap = om_resampler_max_out_frames(&eng->resampler, slot->frames);
+                    if (need_cap > eng->src_out_cap_frames) {
+                        size_t grow = need_cap + 1024U;
+                        double *nbuf = (double *)realloc(eng->src_out_buf, grow * OM_MAX_CHANNELS * sizeof(double));
+                        if (nbuf) {
+                            eng->src_out_buf = nbuf;
+                            eng->src_out_cap_frames = grow;
+                        }
+                    }
+                    if (eng->src_out_buf && eng->src_out_cap_frames >= need_cap) {
+                        out_frames_cnt = om_resampler_process(&eng->resampler, slot->pcm_f64, slot->frames,
+                                                              eng->src_out_buf, eng->src_out_cap_frames);
+                        out_f64_ptr = eng->src_out_buf;
+                    }
+                }
+            }
+
             om_mutex_lock(&eng->lock);
             if (eng->cmd_generation == gen_before && eng->hal_open) {
+                eng->resampler_active = need_src;
                 eng->signal_bitperfect = false;
-                eng->played_frame_idx = local_slot.start_frame_idx + local_slot.frames;
+                eng->played_frame_idx = slot->start_frame_idx + slot->frames;
                 om_hal_handle_t hal_copy = eng->hal;
                 om_mutex_unlock(&eng->lock);
-                om_hal_write(&hal_copy, NULL, local_slot.pcm_f64, local_slot.info.bit_depth, local_slot.frames);
-            } else {
-                om_mutex_unlock(&eng->lock);
+
+                if (out_frames_cnt > 0) {
+                    om_hal_write(&hal_copy, NULL, out_f64_ptr, slot->info.bit_depth, out_frames_cnt);
+                }
+
+                om_mutex_lock(&eng->lock);
             }
         }
+
+        /* Release zero-copy slot ownership if ring wasn't flushed mid-chunk */
+        if (eng->cmd_generation == gen_before && eng->ring_count > 0) {
+            eng->ring_head = (eng->ring_head + 1U) % OM_RING_SLOTS;
+            eng->ring_count--;
+        }
+        eng->out_slot_in_use = false;
+        om_cond_signal(&eng->cond_can_push);
+        om_mutex_unlock(&eng->lock);
     }
     return NULL;
 }
@@ -271,13 +391,25 @@ int om_engine_init(om_engine_t *eng, om_engine_event_cb cb, void *ud) {
     om_cond_init(&eng->cond_can_push);
     om_cond_init(&eng->cond_can_pop);
     om_dsp_init(&eng->dsp);
+    om_resampler_init(&eng->resampler);
 
     eng->ring = (om_ring_slot_t *)calloc(OM_RING_SLOTS, sizeof(om_ring_slot_t));
     if (!eng->ring) return -1;
 
+    eng->src_out_cap_frames = OM_CHUNK_FRAMES * 8U + 64U;
+    eng->src_out_buf = (double *)calloc(eng->src_out_cap_frames * OM_MAX_CHANNELS, sizeof(double));
+    if (!eng->src_out_buf) {
+        free(eng->ring);
+        eng->ring = NULL;
+        return -1;
+    }
+
     snprintf(eng->req_device_id, sizeof(eng->req_device_id), "default");
     eng->prefer_bitperfect_hw = true;
     eng->prefer_dsd_dop = false;
+    eng->dsd_mode = OM_DSD_MODE_PCM;
+    eng->resampler_target_rate = 0; /* Auto Bit-Perfect native rate */
+    eng->resampler_quality = OM_SRC_QUALITY_HIGH;
     eng->volume_lin = 1.0;
     eng->volume_unity = true;
     eng->event_cb = cb;
@@ -306,8 +438,11 @@ void om_engine_shutdown(om_engine_t *eng) {
     if (eng->hal_open) om_hal_close(&eng->hal);
     free(eng->ring);
     eng->ring = NULL;
+    free(eng->src_out_buf);
+    eng->src_out_buf = NULL;
     om_mutex_unlock(&eng->lock);
 
+    om_resampler_destroy(&eng->resampler);
     om_dsp_destroy(&eng->dsp);
     om_cond_destroy(&eng->cond_can_push);
     om_cond_destroy(&eng->cond_can_pop);
@@ -319,37 +454,65 @@ int om_engine_set_output_device(om_engine_t *eng, const char *device_id, bool pr
     snprintf(eng->req_device_id, sizeof(eng->req_device_id), "%s", (device_id && device_id[0]) ? device_id : "default");
     eng->prefer_bitperfect_hw = prefer_bitperfect;
     eng->prefer_dsd_dop = prefer_dop;
+    if (eng->dsd_mode != OM_DSD_MODE_NATIVE) {
+        eng->dsd_mode = prefer_dop ? OM_DSD_MODE_DOP : OM_DSD_MODE_PCM;
+    }
     if (eng->hal_open) {
         om_hal_drop(&eng->hal);
         om_hal_close(&eng->hal);
         eng->hal_open = false;
+        eng->last_requested_hal_rate = 0;
     }
     om_mutex_unlock(&eng->lock);
     return 0;
+}
+
+void om_engine_set_dsd_mode(om_engine_t *eng, om_dsd_mode_t mode) {
+    om_mutex_lock(&eng->lock);
+    eng->dsd_mode = mode;
+    eng->prefer_dsd_dop = (mode == OM_DSD_MODE_DOP);
+    om_mutex_unlock(&eng->lock);
+}
+
+void om_engine_set_resampler_config(om_engine_t *eng, uint32_t target_rate, om_src_quality_t quality) {
+    om_mutex_lock(&eng->lock);
+    bool rate_changed = (eng->resampler_target_rate != target_rate);
+    eng->resampler_target_rate = target_rate;
+    eng->resampler_quality = quality;
+    if (rate_changed && eng->hal_open) {
+        om_hal_drop(&eng->hal);
+        om_hal_close(&eng->hal);
+        eng->hal_open = false;
+        eng->last_requested_hal_rate = 0;
+    }
+    om_mutex_unlock(&eng->lock);
 }
 
 int om_engine_load_and_play(om_engine_t *eng, const char *path, const char *next_path, char *err, size_t err_cap) {
     om_decoder_t new_dec;
     om_decoder_t new_next;
     bool has_new_next = false;
-    bool prefer_dop;
+    om_dsd_mode_t dsd_mode;
+
     om_mutex_lock(&eng->lock);
-    prefer_dop = eng->prefer_dsd_dop;
+    dsd_mode = eng->dsd_mode;
     om_mutex_unlock(&eng->lock);
 
-    if (om_decoder_open_any(path, prefer_dop, &new_dec, err, err_cap) != 0) {
+    if (om_decoder_open_any_ex(path, dsd_mode, &new_dec, err, err_cap) != 0) {
         return -1;
     }
 
     if (next_path && next_path[0]) {
         char nerr[256] = {0};
-        if (om_decoder_open_any(next_path, prefer_dop, &new_next, nerr, sizeof(nerr)) == 0) {
+        if (om_decoder_open_any_ex(next_path, dsd_mode, &new_next, nerr, sizeof(nerr)) == 0) {
             has_new_next = true;
         }
     }
 
     om_mutex_lock(&eng->lock);
     eng->cmd_generation++;
+    wait_decoder_idle_unlocked(eng);
+
     if (eng->has_active_dec && eng->active_dec.close) eng->active_dec.close(&eng->active_dec);
     if (eng->has_next_dec && eng->next_dec.close) {
         eng->next_dec.close(&eng->next_dec);
@@ -362,6 +525,7 @@ int om_engine_load_and_play(om_engine_t *eng, const char *path, const char *next
 
     ring_flush_unlocked(eng);
     om_dsp_reset_state(&eng->dsp);
+    om_resampler_reset(&eng->resampler);
 
     eng->active_dec = new_dec;
     eng->has_active_dec = true;
@@ -394,12 +558,12 @@ int om_engine_queue_next_gapless(om_engine_t *eng, const char *next_path, char *
         return 0;
     }
     om_decoder_t ndec;
-    bool prefer_dop;
+    om_dsd_mode_t dsd_mode;
     om_mutex_lock(&eng->lock);
-    prefer_dop = eng->prefer_dsd_dop;
+    dsd_mode = eng->dsd_mode;
     om_mutex_unlock(&eng->lock);
 
-    if (om_decoder_open_any(next_path, prefer_dop, &ndec, err, err_cap) != 0) {
+    if (om_decoder_open_any_ex(next_path, dsd_mode, &ndec, err, err_cap) != 0) {
         return -1;
     }
 
@@ -409,10 +573,11 @@ int om_engine_queue_next_gapless(om_engine_t *eng, const char *next_path, char *
         eng->has_next_dec = false;
     }
 
-    /* If active track already pushed an unpopped EOF marker into the RAM ring buffer, retract it for gapless continuation */
+    /* Retract unpopped EOF marker in the RAM ring buffer if output_worker hasn't claimed it yet */
     if (!eng->has_active_dec && eng->state == OM_STATE_PLAYING && eng->ring_count > 0) {
         size_t last_idx = (eng->ring_tail + OM_RING_SLOTS - 1U) % OM_RING_SLOTS;
-        if (eng->ring[last_idx].is_eof_marker) {
+        bool claimed_by_out = (eng->out_slot_in_use && last_idx == eng->ring_head);
+        if (!claimed_by_out && eng->ring[last_idx].is_eof_marker) {
             eng->ring_tail = last_idx;
             eng->ring_count--;
             eng->active_dec = ndec;
@@ -460,6 +625,8 @@ void om_engine_stop(om_engine_t *eng) {
     om_mutex_lock(&eng->lock);
     eng->cmd_generation++;
     eng->state = OM_STATE_STOPPED;
+    wait_decoder_idle_unlocked(eng);
+
     if (eng->has_active_dec && eng->active_dec.close) {
         eng->active_dec.close(&eng->active_dec);
         eng->has_active_dec = false;
@@ -473,7 +640,9 @@ void om_engine_stop(om_engine_t *eng) {
         om_hal_drop(&eng->hal);
         om_hal_close(&eng->hal);
         eng->hal_open = false;
+        eng->last_requested_hal_rate = 0;
     }
+    eng->resampler_active = false;
     eng->playing_path[0] = '\0';
     eng->played_frame_idx = 0;
     om_mutex_unlock(&eng->lock);
@@ -491,10 +660,13 @@ int om_engine_seek_seconds(om_engine_t *eng, double seconds) {
         target = eng->active_dec.info.total_frames;
     }
     eng->cmd_generation++;
+    wait_decoder_idle_unlocked(eng);
+
     eng->seek_target_frame = target;
     eng->pending_seek = true;
     eng->played_frame_idx = target;
     ring_flush_unlocked(eng);
+    om_resampler_reset(&eng->resampler);
     if (eng->hal_open) om_hal_drop(&eng->hal);
     om_cond_broadcast(&eng->cond_can_push);
     om_mutex_unlock(&eng->lock);

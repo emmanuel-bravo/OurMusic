@@ -73,22 +73,39 @@ export async function createOurMusicApp({
     dataDir,
     libraryManager: library,
     engineBridge: engine,
+    presetManager: presets,
   });
 
-  // Push persisted EQ + DSP Hook configuration to C11 engine at boot
+  // Push persisted EQ, PEQ, Crossfeed, Convolver, ReplayGain, Resampler & DSP Hook configuration to C11 engine at boot
   const initEq = presets.getActiveState();
-  await engine.configureEqualizer({
-    enabled: initEq.enabled,
-    numBands: initEq.numBands,
-    preampDb: initEq.preampDb,
-    gains: initEq.gains,
-    smoothing: initEq.smoothingEnabled,
-    limiter: initEq.limiterEnabled,
-  });
+  if (initEq.peqMode && Array.isArray(initEq.peqBands) && initEq.peqBands.length > 0) {
+    await engine.configureParametricEq({
+      enabled: initEq.enabled,
+      preampDb: initEq.preampDb,
+      smoothing: initEq.smoothingEnabled,
+      limiter: initEq.limiterEnabled,
+      bands: initEq.peqBands,
+    });
+  } else {
+    await engine.configureEqualizer({
+      enabled: initEq.enabled,
+      numBands: initEq.numBands,
+      preampDb: initEq.preampDb,
+      gains: initEq.gains,
+      smoothing: initEq.smoothingEnabled,
+      limiter: initEq.limiterEnabled,
+    });
+  }
   await engine.setDspHook({
     enabled: initEq.customHookEnabled,
     stereoWidth: initEq.stereoWidth,
   });
+  await engine.setCrossfeed(initEq.crossfeed);
+  await engine.setReplayGain(initEq.replayGain);
+  await engine.setResampler(initEq.resampler);
+  if (initEq.convolver?.irPath && fs.existsSync(initEq.convolver.irPath)) {
+    await engine.setConvolver(initEq.convolver).catch(() => {});
+  }
 
   const sseClients = new Set();
   const broadcastSse = (event, data) => {
@@ -138,7 +155,7 @@ export async function createOurMusicApp({
         return sendJson(res, 200, {
           ok: true,
           platform: process.platform,
-          audioApi: process.platform === 'win32' ? 'WASAPI' : 'ALSA',
+          audioApi: process.platform === 'win32' ? 'WASAPI / ASIO' : 'ALSA',
           status,
           devices,
           deviceConfig: engine.deviceConfig,
@@ -212,6 +229,15 @@ export async function createOurMusicApp({
           summary: library.getSummary(),
           smartPlaylists: playlists.listSmartPlaylists(),
         });
+      }
+
+      const trackLoudnessMatch = /^\/api\/tracks\/([^/]+)\/loudness$/.exec(pathname);
+      if (method === 'POST' && trackLoudnessMatch) {
+        const body = await readJsonBody(req);
+        const result = await library.analyzeTrackLoudness(trackLoudnessMatch[1], {
+          writeTags: Boolean(body.writeTags),
+        });
+        return sendJson(res, 200, { ok: true, ...result });
       }
 
       const coverMatch = /^\/api\/covers\/([^/]+)$/.exec(pathname);
@@ -473,6 +499,112 @@ export async function createOurMusicApp({
           eqState: presets.getActiveState(),
           presets: presets.listPresets(presets.activeState.numBands),
         });
+      }
+
+      /* --- Point 1 & Point 2 Advanced Audiophile DSP & SRC Endpoints --- */
+      if (method === 'GET' && pathname === '/api/dsp') {
+        const [status] = await Promise.all([engine.getStatus()]);
+        return sendJson(res, 200, {
+          ok: true,
+          eqState: presets.getActiveState(),
+          engineDsp: status?.eq || null,
+          resampler: {
+            active: Boolean(status?.resamplerActive),
+            targetRate: status?.resamplerTargetRate || 0,
+            quality: status?.resamplerQuality || 'high',
+          },
+        });
+      }
+
+      if (method === 'POST' && pathname === '/api/dsp/peq') {
+        const body = await readJsonBody(req);
+        const eqState = presets.saveActiveState({
+          enabled: body.enabled !== undefined ? Boolean(body.enabled) : presets.activeState.enabled,
+          peqMode: body.peqMode !== undefined ? Boolean(body.peqMode) : true,
+          preampDb: body.preampDb !== undefined ? Number(body.preampDb) : presets.activeState.preampDb,
+          smoothingEnabled:
+            body.smoothing !== undefined ? Boolean(body.smoothing) : presets.activeState.smoothingEnabled,
+          limiterEnabled:
+            body.limiter !== undefined ? Boolean(body.limiter) : presets.activeState.limiterEnabled,
+          peqBands: Array.isArray(body.bands) ? body.bands : presets.activeState.peqBands,
+        });
+        await engine.configureParametricEq({
+          enabled: eqState.enabled,
+          preampDb: eqState.preampDb,
+          smoothing: eqState.smoothingEnabled,
+          limiter: eqState.limiterEnabled,
+          bands: eqState.peqBands,
+        });
+        broadcastSse('eq_updated', eqState);
+        return sendJson(res, 200, { ok: true, eqState });
+      }
+
+      if (method === 'POST' && pathname === '/api/dsp/peq/band') {
+        const body = await readJsonBody(req);
+        const idx = Math.max(0, Math.min(15, Number(body.band) || 0));
+        const cur = presets.getActiveState();
+        while (cur.peqBands.length <= idx) {
+          cur.peqBands.push({ enabled: false, type: 'peaking', freq: 1000, q: 1.0, gainDb: 0 });
+        }
+        cur.peqBands[idx] = {
+          enabled: body.enabled !== undefined ? Boolean(body.enabled) : cur.peqBands[idx].enabled,
+          type: body.type || cur.peqBands[idx].type,
+          freq: body.freq !== undefined ? Number(body.freq) : cur.peqBands[idx].freq,
+          q: body.q !== undefined ? Number(body.q) : cur.peqBands[idx].q,
+          gainDb: body.gainDb !== undefined ? Number(body.gainDb) : cur.peqBands[idx].gainDb,
+        };
+        const eqState = presets.saveActiveState({ peqMode: true, peqBands: cur.peqBands });
+        await engine.setPeqBand({ band: idx, ...eqState.peqBands[idx] });
+        broadcastSse('eq_updated', eqState);
+        return sendJson(res, 200, { ok: true, eqState });
+      }
+
+      if (method === 'POST' && pathname === '/api/dsp/crossfeed') {
+        const body = await readJsonBody(req);
+        const eqState = presets.saveActiveState({ crossfeed: body });
+        await engine.setCrossfeed(eqState.crossfeed);
+        broadcastSse('eq_updated', eqState);
+        return sendJson(res, 200, { ok: true, eqState, crossfeed: eqState.crossfeed });
+      }
+
+      if (method === 'POST' && pathname === '/api/dsp/convolver') {
+        const body = await readJsonBody(req);
+        await engine.setConvolver({
+          enabled: body.enabled ?? presets.activeState.convolver.enabled,
+          irPath: body.irPath !== undefined ? body.irPath : presets.activeState.convolver.irPath,
+          mix: body.mix ?? presets.activeState.convolver.mix,
+          gainDb: body.gainDb ?? presets.activeState.convolver.gainDb,
+          autoNormalize: body.autoNormalize ?? presets.activeState.convolver.autoNormalize,
+        });
+        const eqState = presets.saveActiveState({ convolver: body });
+        broadcastSse('eq_updated', eqState);
+        return sendJson(res, 200, { ok: true, eqState, convolver: eqState.convolver });
+      }
+
+      if (method === 'POST' && pathname === '/api/dsp/replaygain') {
+        const body = await readJsonBody(req);
+        const eqState = presets.saveActiveState({ replayGain: body });
+        await engine.setReplayGain({
+          ...eqState.replayGain,
+          ...(typeof body.trackGainDb === 'number' ? { trackGainDb: body.trackGainDb } : {}),
+          ...(typeof body.trackPeak === 'number' ? { trackPeak: body.trackPeak } : {}),
+          ...(typeof body.albumGainDb === 'number' ? { albumGainDb: body.albumGainDb } : {}),
+          ...(typeof body.albumPeak === 'number' ? { albumPeak: body.albumPeak } : {}),
+        });
+        const curTrack = playlists.getQueueState().currentTrack;
+        if (curTrack && body.trackGainDb === undefined) {
+          await playlists._pushTrackReplayGain(curTrack);
+        }
+        broadcastSse('eq_updated', eqState);
+        return sendJson(res, 200, { ok: true, eqState, replayGain: eqState.replayGain });
+      }
+
+      if (method === 'POST' && pathname === '/api/dsp/resampler') {
+        const body = await readJsonBody(req);
+        const eqState = presets.saveActiveState({ resampler: body });
+        await engine.setResampler(eqState.resampler);
+        broadcastSse('eq_updated', eqState);
+        return sendJson(res, 200, { ok: true, eqState, resampler: eqState.resampler });
       }
 
       /* --- Playlists (M3U/PLS/XSPF) & Smart Playlists --- */

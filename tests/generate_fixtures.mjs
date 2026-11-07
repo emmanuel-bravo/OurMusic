@@ -106,10 +106,15 @@ export function readWavPcm(filePath) {
 }
 
 /**
- * Generate a Sony DSF (DSD64 2.8224 MHz stereo) 1-bit Sigma-Delta file.
+ * Generate a Sony DSF (DSD64..DSD1024 stereo) 1-bit Sigma-Delta file.
  */
-export function writeDsfSine(filePath, durationSec = 0.08, freqL = 1000, freqR = 1500) {
-  const dsdRate = 2822400;
+export function writeDsfSine(
+  filePath,
+  durationSec = 0.08,
+  freqL = 1000,
+  freqR = 1500,
+  dsdRate = 2822400,
+) {
   const blockSize = 4096;
   const totalBitsPerCh = Math.floor((dsdRate * durationSec) / (blockSize * 8)) * (blockSize * 8);
   const numBlocksPerCh = totalBitsPerCh / (blockSize * 8);
@@ -177,10 +182,9 @@ export function writeDsfSine(filePath, durationSec = 0.08, freqL = 1000, freqR =
 }
 
 /**
- * Generate a Philips DSDIFF (.dff) DSD64 stereo file (MSB-first byte-interleaved).
+ * Generate a Philips DSDIFF (.dff) DSD64..DSD1024 stereo file (MSB-first byte-interleaved).
  */
-export function writeDffSine(filePath, durationSec = 0.06, freq = 1000) {
-  const dsdRate = 2822400;
+export function writeDffSine(filePath, durationSec = 0.06, freq = 1000, dsdRate = 2822400) {
   const bytesPerCh = Math.floor((dsdRate * durationSec) / 8 / 4) * 4;
   const totalBitsPerCh = bytesPerCh * 8;
   const dsdBodyLen = bytesPerCh * 2;
