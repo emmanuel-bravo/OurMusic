@@ -1,11 +1,11 @@
 {
   "name": "ourmusic",
-  "version": "1.0.0",
-  "description": "OurMusic — Reproductor local de audio HiFi clean-room multiplataforma (Linux ALSA & Windows WASAPI) con motor C11 bit-perfect, gapless playback, DSP Biquad de 64 bits, gestor de biblioteca, editor de metadatos y listas inteligentes.",
+  "version": "2.0.0",
+  "description": "OurMusic — Reproductor local de audio HiFi clean-room multiplataforma (Linux ALSA & Windows WASAPI/ASIO) con motor C11 bit-perfect, gapless playback, DSP 64-bit (PEQ 16 bandas, Convolver FIR, ReplayGain BS.1770-4), base de datos local SQLite FTS5/WAL y vigilancia incremental de carpetas.",
   "type": "module",
   "private": true,
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.5.0"
   },
   "scripts": {
     "build:linux": "bash scripts/build-linux.sh",

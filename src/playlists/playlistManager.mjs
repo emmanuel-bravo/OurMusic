@@ -288,16 +288,13 @@ const DEFAULT_SMART_PLAYLISTS = [
  * M3U/PLS/XSPF Import/Export, and Rule-Based Smart Playlists.
  */
 export class PlaylistManager extends EventEmitter {
-  constructor({ dataDir, libraryManager, engineBridge, presetManager = null }) {
+  constructor({ dataDir, libraryManager, engineBridge, presetManager = null, database = null }) {
     super();
     this.dataDir = dataDir;
     this.library = libraryManager;
     this.engine = engineBridge;
     this.presets = presetManager;
-    this.filePath = path.join(dataDir, 'playlists.json');
-
-    this.playlists = []; // [{ id, name, trackPaths, updatedAt }]
-    this.smartPlaylists = [];
+    this.db = database || libraryManager?.db || null;
 
     // Active playback queue
     this.queue = []; // Array of track objects or minimal path descriptors
@@ -305,44 +302,19 @@ export class PlaylistManager extends EventEmitter {
     this.repeatMode = 'off'; // 'off' | 'all' | 'one'
     this.shuffle = false;
 
-    this._load();
+    this._seedDefaultSmartPlaylists();
     this._bindEngineEvents();
   }
 
-  _load() {
-    fs.mkdirSync(this.dataDir, { recursive: true });
-    if (!fs.existsSync(this.filePath)) {
-      this.smartPlaylists = structuredClone(DEFAULT_SMART_PLAYLISTS);
-      this._save();
-      return;
+  _seedDefaultSmartPlaylists() {
+    if (!this.db) return;
+    if (this.db.listSmartPlaylistDefs().length === 0) {
+      this.db.runInTransaction(() => {
+        for (const sp of DEFAULT_SMART_PLAYLISTS) {
+          this.db.saveSmartPlaylistRecord(sp);
+        }
+      });
     }
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, 'utf8'));
-      this.playlists = Array.isArray(parsed.playlists) ? parsed.playlists : [];
-      this.smartPlaylists =
-        Array.isArray(parsed.smartPlaylists) && parsed.smartPlaylists.length > 0
-          ? parsed.smartPlaylists
-          : structuredClone(DEFAULT_SMART_PLAYLISTS);
-    } catch {
-      this.smartPlaylists = structuredClone(DEFAULT_SMART_PLAYLISTS);
-    }
-  }
-
-  _save() {
-    fs.mkdirSync(this.dataDir, { recursive: true });
-    fs.writeFileSync(
-      this.filePath,
-      JSON.stringify(
-        {
-          version: 1,
-          playlists: this.playlists,
-          smartPlaylists: this.smartPlaylists,
-        },
-        null,
-        2
-      ),
-      'utf8'
-    );
   }
 
   _bindEngineEvents() {
@@ -565,25 +537,17 @@ export class PlaylistManager extends EventEmitter {
     return this.getQueueState();
   }
 
-  /* ---------------- Standard Playlists CRUD + Import/Export ---------------- */
+  /* ---------------- Standard Playlists CRUD + Import/Export (SQLite) ---------------- */
 
   listPlaylists() {
-    return this.playlists.map((pl) => this.getPlaylist(pl.id));
+    return this.db
+      .listPlaylistRecords()
+      .map((pl) => this.getPlaylist(pl.id))
+      .filter(Boolean);
   }
 
   getPlaylist(id) {
-    const pl = this.playlists.find((p) => p.id === id);
-    if (!pl) return null;
-    const tracks = pl.trackPaths
-      .map((fp) => this._resolveTrackItem(fp))
-      .filter(Boolean);
-    return {
-      id: pl.id,
-      name: pl.name,
-      trackCount: tracks.length,
-      tracks,
-      updatedAt: pl.updatedAt,
-    };
+    return this.db.getPlaylistWithTracks(id, (fp) => this._resolveTrackItem(fp));
   }
 
   createPlaylist({ name, trackIdsOrPaths = [] }) {
@@ -591,39 +555,35 @@ export class PlaylistManager extends EventEmitter {
     const trackPaths = trackIdsOrPaths
       .map((x) => this._resolveTrackItem(x)?.filePath)
       .filter(Boolean);
-    const pl = {
-      id: `pl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    const id = `pl_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    this.db.savePlaylistRecord({
+      id,
       name: cleanName,
       trackPaths,
       updatedAt: new Date().toISOString(),
-    };
-    this.playlists.push(pl);
-    this._save();
-    return this.getPlaylist(pl.id);
+    });
+    return this.getPlaylist(id);
   }
 
   updatePlaylist(id, { name, trackIdsOrPaths }) {
-    const pl = this.playlists.find((p) => p.id === id);
-    if (!pl) throw new Error('Lista de reproducción no encontrada');
-    if (typeof name === 'string' && name.trim()) pl.name = name.trim();
-    if (Array.isArray(trackIdsOrPaths)) {
-      pl.trackPaths = trackIdsOrPaths
-        .map((x) => this._resolveTrackItem(x)?.filePath)
-        .filter(Boolean);
-    }
-    pl.updatedAt = new Date().toISOString();
-    this._save();
-    return this.getPlaylist(pl.id);
+    const existing = this.getPlaylist(id);
+    if (!existing) throw new Error('Lista de reproducción no encontrada');
+    const newName = typeof name === 'string' && name.trim() ? name.trim() : existing.name;
+    const newPaths = Array.isArray(trackIdsOrPaths)
+      ? trackIdsOrPaths.map((x) => this._resolveTrackItem(x)?.filePath).filter(Boolean)
+      : existing.tracks.map((t) => t.filePath);
+
+    this.db.savePlaylistRecord({
+      id: existing.id,
+      name: newName,
+      trackPaths: newPaths,
+      updatedAt: new Date().toISOString(),
+    });
+    return this.getPlaylist(existing.id);
   }
 
   deletePlaylist(id) {
-    const before = this.playlists.length;
-    this.playlists = this.playlists.filter((p) => p.id !== id);
-    if (this.playlists.length !== before) {
-      this._save();
-      return true;
-    }
-    return false;
+    return this.db.deletePlaylistRecord(id);
   }
 
   exportPlaylist(id, format = 'm3u') {
@@ -698,12 +658,12 @@ export class PlaylistManager extends EventEmitter {
     });
   }
 
-  /* ---------------- Smart Playlists ("Listas Inteligentes") ---------------- */
+  /* ---------------- Smart Playlists ("Listas Inteligentes" compiladas a SQL) ---------------- */
 
   listSmartPlaylists() {
-    const allTracks = this.library.getAllTracks();
-    return this.smartPlaylists.map((sp) => {
-      const tracks = evaluateSmartPlaylist(sp, allTracks);
+    const defs = this.db.listSmartPlaylistDefs();
+    return defs.map((sp) => {
+      const tracks = this.db.evaluateSmartPlaylistSql(sp, evaluateSmartPlaylist);
       return {
         ...sp,
         trackCount: tracks.length,
@@ -713,9 +673,9 @@ export class PlaylistManager extends EventEmitter {
   }
 
   getSmartPlaylist(id) {
-    const sp = this.smartPlaylists.find((s) => s.id === id);
+    const sp = this.db.getSmartPlaylistDef(id);
     if (!sp) return null;
-    const tracks = evaluateSmartPlaylist(sp, this.library.getAllTracks());
+    const tracks = this.db.evaluateSmartPlaylistSql(sp, evaluateSmartPlaylist);
     return { ...sp, trackCount: tracks.length, tracks };
   }
 
@@ -731,23 +691,14 @@ export class PlaylistManager extends EventEmitter {
       sortBy: def.sortBy || 'title',
       sortOrder: def.sortOrder === 'desc' ? 'desc' : 'asc',
       limit: Number(def.limit) > 0 ? Number(def.limit) : 250,
+      updatedAt: new Date().toISOString(),
     };
 
-    const idx = this.smartPlaylists.findIndex((s) => s.id === id);
-    if (idx >= 0) this.smartPlaylists[idx] = entry;
-    else this.smartPlaylists.push(entry);
-
-    this._save();
+    this.db.saveSmartPlaylistRecord(entry);
     return this.getSmartPlaylist(id);
   }
 
   deleteSmartPlaylist(id) {
-    const before = this.smartPlaylists.length;
-    this.smartPlaylists = this.smartPlaylists.filter((s) => s.id !== id);
-    if (this.smartPlaylists.length !== before) {
-      this._save();
-      return true;
-    }
-    return false;
+    return this.db.deleteSmartPlaylistRecord(id);
   }
 }

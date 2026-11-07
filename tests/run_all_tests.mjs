@@ -11,6 +11,7 @@ import {
   writeDffSine,
 } from './generate_fixtures.mjs';
 import { PresetManager } from '../src/dsp/presetManager.mjs';
+import { MusicDatabase } from '../src/db/musicDatabase.mjs';
 import { EngineBridge } from '../src/engine/engineBridge.mjs';
 import { readMetadata, writeMetadata } from '../src/tags/tagParser.mjs';
 import { createOurMusicApp } from '../src/server.mjs';
@@ -891,6 +892,202 @@ await runTest('14.1 Verificación Estática C11 de Backend Windows ASIO (hal_asi
     }).then((r) => r.json());
     assert.equal(srcRes.resampler.targetRate, 96000);
     assert.equal(srcRes.resampler.quality, 'ultra');
+  } finally {
+    await app.close();
+  }
+});
+
+/* 9. POINT 4 — EMBEDDED SQLITE (WAL + FTS5 + PAGINATION) & REAL-TIME FILE WATCHER */
+await runTest('15.1 Motor SQLite Local (WAL + FTS5 Diacríticos/Letras + Paginación SQL + Migración de JSON)', async () => {
+  const dbDir = path.join(TMP_DIR, 'sqlite_bench_dir');
+  fs.mkdirSync(dbDir, { recursive: true });
+
+  // 1. Seed legacy JSON files to verify automatic zero-loss migration into ourmusic.db
+  fs.writeFileSync(
+    path.join(dbDir, 'library.json'),
+    JSON.stringify({
+      version: 1,
+      folders: ['/musica/coleccion_clasica'],
+      tracks: [
+        {
+          id: 'trk_legacy_001',
+          filePath: '/musica/coleccion_clasica/aranjuez.flac',
+          fileName: 'aranjuez.flac',
+          sizeBytes: 42000000,
+          mtimeMs: 1700000000000,
+          tagFormat: 'VorbisComment (FLAC)',
+          title: 'Sinfonía Clásica del Alba',
+          artist: 'Paco de Lucía',
+          album: 'Grabaciones Históricas',
+          year: 1991,
+          composer: 'Joaquín Rodrigo',
+          genre: 'Clásica',
+          codec: 'FLAC',
+          sampleRate: 96000,
+          bitDepth: 24,
+          channels: 2,
+          durationSec: 615.4,
+          isLossless: true,
+          isHiRes: true,
+        },
+      ],
+    }),
+  );
+  fs.writeFileSync(
+    path.join(dbDir, 'playlists.json'),
+    JSON.stringify({
+      version: 1,
+      playlists: [
+        {
+          id: 'pl_legacy_1',
+          name: 'Favoritas Migradas',
+          trackPaths: ['/musica/coleccion_clasica/aranjuez.flac'],
+        },
+      ],
+      smartPlaylists: [],
+    }),
+  );
+
+  const db = new MusicDatabase(dbDir);
+  try {
+    assert.ok(fs.existsSync(path.join(dbDir, 'ourmusic.db')), 'Archivo físico ourmusic.db debe crearse');
+    assert.ok(fs.existsSync(path.join(dbDir, 'library.json.migrated')), 'JSON heredado debe marcarse como migrado');
+    assert.equal(db.countTracks(), 1);
+    assert.equal(db.getPlaylistWithTracks('pl_legacy_1')?.trackCount, 1);
+
+    // 2. Bulk insert 2,499 additional tracks (total = 2,500) inside an ACID WAL transaction
+    db.runInTransaction(() => {
+      for (let i = 2; i <= 2500; i++) {
+        const isDsd = i % 25 === 0;
+        db.upsertTrack(
+          {
+            id: `trk_bulk_${i}`,
+            filePath: `/musica/coleccion_clasica/pista_${String(i).padStart(4, '0')}.${isDsd ? 'dsf' : 'flac'}`,
+            fileName: `pista_${String(i).padStart(4, '0')}.${isDsd ? 'dsf' : 'flac'}`,
+            sizeBytes: 25000000 + i,
+            mtimeMs: 1700000000000 + i,
+            title: `Estudio Acústico Nº ${i}`,
+            artist: `Intérprete ${(i % 40) + 1}`,
+            album: `Volumen ${(i % 80) + 1}`,
+            year: 1980 + (i % 45),
+            composer: i === 777 ? 'Heitor Villa-Lobos' : 'Anónimo',
+            genre: isDsd ? 'Jazz' : 'Instrumental',
+            hasLyrics: i === 777,
+            hasSyncedLyrics: i === 777,
+            codec: isDsd ? 'DSD' : 'FLAC',
+            sampleRate: isDsd ? 352800 : 44100,
+            bitDepth: 24,
+            channels: 2,
+            durationSec: 180 + (i % 120),
+            dsdBitRate: isDsd ? 11289600 : 0,
+            isLossless: true,
+            isHiRes: true,
+          },
+          {
+            lyricsText:
+              i === 777 ? '[00:12.00] Susurros nocturnos en el preludio de guitarra' : '',
+          },
+        );
+      }
+    });
+
+    assert.equal(db.countTracks(), 2500);
+    assert.equal(db.getStats().ftsIndexedTracks, 2500);
+
+    // 3. Sub-5ms Paginated SQL query (LIMIT 50 OFFSET 100)
+    const tPage0 = performance.now();
+    const page = db.queryTracksPaginated({ limit: 50, offset: 100, sortBy: 'title', sortOrder: 'asc' });
+    const pageMs = performance.now() - tPage0;
+    assert.equal(page.total, 2500);
+    assert.equal(page.tracks.length, 50);
+    assert.ok(pageMs < 25, `Consulta paginada SQLite demasiado lenta: ${pageMs.toFixed(2)} ms`);
+
+    // 4. Diacritic-insensitive FTS5 search ("Sinfonia Lucia" -> matches "Sinfonía Clásica del Alba" / "Paco de Lucía")
+    const ftsAccent = db.queryTracksPaginated({ search: 'Sinfonia Lucia' });
+    assert.equal(ftsAccent.total, 1);
+    assert.equal(ftsAccent.tracks[0].id, 'trk_legacy_001');
+
+    // 5. Full-Text Search inside embedded song lyrics!
+    const ftsLyrics = db.queryTracksPaginated({ search: 'Susurros nocturnos preludio' });
+    assert.equal(ftsLyrics.total, 1);
+    assert.equal(ftsLyrics.tracks[0].id, 'trk_bulk_777');
+
+    // 6. Compiled SQL Smart Playlist execution over 2,500 tracks
+    const dsdMatches = db.evaluateSmartPlaylistSql({
+      match: 'all',
+      rules: [
+        { field: 'codec', operator: 'equals', value: 'DSD' },
+        { field: 'sampleRate', operator: 'gte', value: 176400 },
+      ],
+      sortBy: 'durationSec',
+      sortOrder: 'desc',
+      limit: 500,
+    });
+    assert.equal(dsdMatches.length, 100); // 25 * 1 .. 25 * 100 = 100 DSD tracks
+  } finally {
+    db.close();
+  }
+});
+
+await runTest('15.2 Observador Incremental en Tiempo Real (File Watcher Automático sin Re-Escaneo Manual)', async () => {
+  const watchDataDir = path.join(TMP_DIR, 'watcher_db_data');
+  const liveMusicDir = path.join(TMP_DIR, 'live_watched_music');
+  fs.mkdirSync(liveMusicDir, { recursive: true });
+  fs.copyFileSync(fx.flac16, path.join(liveMusicDir, 'inicial.flac'));
+
+  const app = await createOurMusicApp({
+    dataDir: watchDataDir,
+    port: 0,
+    pollIntervalMs: 0,
+    watchFolders: true,
+    watcherDebounceMs: 60,
+  });
+
+  try {
+    const initScan = await fetch(`${app.baseUrl}/api/library/scan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory: liveMusicDir }),
+    }).then((r) => r.json());
+    assert.equal(initScan.report.totalLibraryTracks, 1);
+
+    // Drop a new Hi-Res WAV into liveMusicDir and wait for OS watcher to index it automatically!
+    const addedPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timeout esperando evento watcher_indexed')), 4000);
+      app.library.once('watcher_indexed', (rec) => {
+        clearTimeout(timer);
+        resolve(rec);
+      });
+    });
+
+    const droppedFile = path.join(liveMusicDir, 'nuevo_disco_hires.wav');
+    fs.copyFileSync(fx.ref24, droppedFile);
+    const autoIndexed = await addedPromise;
+    assert.equal(autoIndexed.fileName, 'nuevo_disco_hires.wav');
+    assert.equal(autoIndexed.sampleRate, 96000);
+
+    const afterAdd = await fetch(`${app.baseUrl}/api/library/tracks?limit=10&offset=0`).then((r) => r.json());
+    assert.equal(afterAdd.total, 2);
+
+    // Delete the dropped file from disk and verify OS watcher prunes it from SQLite automatically!
+    const removedPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timeout esperando evento watcher_removed')), 4000);
+      app.library.once('watcher_removed', (ev) => {
+        clearTimeout(timer);
+        resolve(ev);
+      });
+    });
+
+    fs.unlinkSync(droppedFile);
+    await removedPromise;
+
+    const afterDel = await fetch(`${app.baseUrl}/api/library/tracks`).then((r) => r.json());
+    assert.equal(afterDel.total, 1);
+
+    const dbStatsRes = await fetch(`${app.baseUrl}/api/library/db-stats`).then((r) => r.json());
+    assert.equal(dbStatsRes.ok, true);
+    assert.equal(dbStatsRes.stats.journalMode, 'wal');
+    assert.equal(dbStatsRes.stats.activeWatchers, 1);
   } finally {
     await app.close();
   }

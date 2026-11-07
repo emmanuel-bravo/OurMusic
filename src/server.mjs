@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EngineBridge } from './engine/engineBridge.mjs';
 import { PresetManager } from './dsp/presetManager.mjs';
+import { MusicDatabase } from './db/musicDatabase.mjs';
 import { LibraryManager } from './library/libraryManager.mjs';
 import { PlaylistManager } from './playlists/playlistManager.mjs';
 
@@ -61,19 +62,29 @@ export async function createOurMusicApp({
   port = 0,
   host = '127.0.0.1',
   pollIntervalMs = 100,
+  watchFolders = true,
+  watcherDebounceMs = 200,
 } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
 
   const engine = new EngineBridge({ pollIntervalMs });
   await engine.start();
 
+  const database = new MusicDatabase(dataDir);
   const presets = new PresetManager(dataDir);
-  const library = new LibraryManager({ dataDir, engineBridge: engine });
+  const library = new LibraryManager({
+    dataDir,
+    engineBridge: engine,
+    database,
+    watchFolders,
+    watcherDebounceMs,
+  });
   const playlists = new PlaylistManager({
     dataDir,
     libraryManager: library,
     engineBridge: engine,
     presetManager: presets,
+    database,
   });
 
   // Push persisted EQ, PEQ, Crossfeed, Convolver, ReplayGain, Resampler & DSP Hook configuration to C11 engine at boot
@@ -128,6 +139,12 @@ export async function createOurMusicApp({
   library.on('scan_progress', (p) => broadcastSse('scan_progress', p));
   library.on('scan_completed', (p) => broadcastSse('scan_completed', p));
   library.on('track_updated', (t) => broadcastSse('track_updated', t));
+  library.on('watcher_indexed', (t) => broadcastSse('watcher_indexed', t));
+  library.on('watcher_removed', (ev) => broadcastSse('watcher_removed', ev));
+  library.on('library_changed', (ev) => broadcastSse('library_changed', {
+    ...ev,
+    summary: library.getSummary(),
+  }));
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -152,6 +169,9 @@ export async function createOurMusicApp({
       if (method === 'GET' && pathname === '/api/bootstrap') {
         const [status, devices] = await Promise.all([engine.getStatus(), engine.listDevices()]);
         const eqState = presets.getActiveState();
+        const bootLimit = parseInt(url.searchParams.get('limit') || '0', 10) || 0;
+        const bootOffset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
+        const page = library.queryTracksPaginated({ limit: bootLimit, offset: bootOffset });
         return sendJson(res, 200, {
           ok: true,
           platform: process.platform,
@@ -163,15 +183,17 @@ export async function createOurMusicApp({
           presets: presets.listPresets(eqState.numBands),
           queueState: playlists.getQueueState(),
           librarySummary: library.getSummary(),
-          tracks: library.queryTracks(),
+          dbStats: library.getDatabaseStats(),
+          tracks: page.tracks,
+          totalTracks: page.total,
           playlists: playlists.listPlaylists(),
           smartPlaylists: playlists.listSmartPlaylists(),
         });
       }
 
-      /* --- Library & Tag Editing --- */
+      /* --- Library (SQLite + FTS5 + Pagination) & Tag Editing --- */
       if (method === 'GET' && pathname === '/api/library/tracks') {
-        const tracks = library.queryTracks({
+        const page = library.queryTracksPaginated({
           search: url.searchParams.get('search') || '',
           codec: url.searchParams.get('codec') || '',
           artist: url.searchParams.get('artist') || '',
@@ -182,8 +204,20 @@ export async function createOurMusicApp({
           syncedLyricsOnly: url.searchParams.get('syncedLyricsOnly') === 'true',
           sortBy: url.searchParams.get('sortBy') || 'title',
           sortOrder: url.searchParams.get('sortOrder') || 'asc',
+          limit: parseInt(url.searchParams.get('limit') || '0', 10) || 0,
+          offset: parseInt(url.searchParams.get('offset') || '0', 10) || 0,
         });
-        return sendJson(res, 200, { ok: true, tracks });
+        return sendJson(res, 200, {
+          ok: true,
+          tracks: page.tracks,
+          total: page.total,
+          limit: page.limit,
+          offset: page.offset,
+        });
+      }
+
+      if (method === 'GET' && pathname === '/api/library/db-stats') {
+        return sendJson(res, 200, { ok: true, stats: library.getDatabaseStats() });
       }
 
       if (method === 'GET' && pathname === '/api/library/summary') {
@@ -723,8 +757,10 @@ export async function createOurMusicApp({
       }
     }
     sseClients.clear();
+    library.close();
     await new Promise((resolve) => server.close(() => resolve()));
     await engine.shutdown();
+    database.close();
   };
 
   return {
@@ -732,6 +768,7 @@ export async function createOurMusicApp({
     port: actualPort,
     server,
     engine,
+    database,
     presets,
     library,
     playlists,

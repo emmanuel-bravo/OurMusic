@@ -28,20 +28,23 @@
    - **Crossfeed Acústico de Auriculares (Bauer / Meier)**: filtro de sombra craneal ILD (`300–2000 Hz`) + línea de micro-retardo interaural ITD (`0–650 µs`) con compensación de graves centrales.
    - **Hook de Pipeline Extensible (`om_dsp_register_hook`)** + **Bypass Bit-Perfect Automático** cuando todos los módulos DSP están inactivos.
 
-3. **Gestor de Biblioteca Paralelo y Lector O(metadata) (`src/library/`, `src/tags/`)**:
-   - Escaneo recursivo paralelo (8 workers concurrentes) con lectura **solo de cabeceras/átomos** (`fs.readSync`), evitando cargar cientos de MB de audio PCM/DSD/FLAC/ALAC en RAM.
-   - Lectura y escritura directa de etiquetas **ID3v2.3/v2.4** (`.mp3`, `.wav`, `.dsf`), **Vorbis Comments + PICTURE** (`.flac`) y **MP4 `ilst`** (`.m4a`/ALAC, con ajuste exacto `stco`/`co64`), incluyendo letras sincronizadas y etiquetas `REPLAYGAIN_*` / `R128_*`.
+3. **Base de Datos Local SQLite + FTS5 + Vigilancia en Tiempo Real (`src/db/`, `src/library/`, `src/tags/`)**:
+   - **Motor SQLite embebido nativo (`node:sqlite`, `data/ourmusic.db`)**: cero servidores externos y cero dependencias npm, configurado con `PRAGMA journal_mode = WAL` y transacciones ACID por lotes.
+   - **Índice invertido FTS5 (`tracks_fts`, `unicode61 remove_diacritics 2`)**: búsquedas instantáneas (`< 2 ms`) insensibles a tildes/mayúsculas sobre título, artista, álbum, compositor, género, códec, nombre de archivo y **letras completas**, sincronizado automáticamente vía *triggers* SQLite.
+   - **Consultas paginadas en SQL (`LIMIT ? OFFSET ?`)** y migración transparente sin pérdida desde archivos heredados `library.json` / `playlists.json`.
+   - **Vigilancia incremental del sistema de archivos (`folderWatcher.mjs`)**: detección en vivo (`inotify` en Linux / `ReadDirectoryChangesW` en Windows) con *debounce* de escritura para indexar pistas nuevas/modificadas y purgar archivos eliminados al instante sin reescanear la colección.
+   - **Escaneo paralelo O(metadata)**: 8 workers concurrentes con lectura exclusiva de cabeceras/átomos (`fs.readSync`), más lectura/escritura directa de etiquetas **ID3v2.3/v2.4** (`.mp3`, `.wav`, `.dsf`), **Vorbis Comments + PICTURE** (`.flac`) y **MP4 `ilst`** (`.m4a`/ALAC, con ajuste exacto `stco`/`co64`).
 
-4. **Gestor de Listas de Reproducción y API Asíncrona (`src/playlists/`, `src/server.mjs`)**:
-   - Cola activa gapless, importación/exportación **M3U/M3U8**, **PLS** y **XSPF**, y motor de **Listas Inteligentes**.
-   - Telemetría adaptativa con **0 % de uso de CPU en reposo** y endpoints REST listos para cualquier interfaz personalizada (`/api/dsp`, `/api/dsp/peq`, `/api/dsp/peq/band`, `/api/dsp/crossfeed`, `/api/dsp/convolver`, `/api/dsp/replaygain`, `/api/dsp/resampler`, `/api/tracks/:id/loudness`).
+4. **Gestor de Listas de Reproducción en SQL y API Asíncrona (`src/playlists/`, `src/server.mjs`)**:
+   - Cola activa gapless, importación/exportación **M3U/M3U8**, **PLS** y **XSPF**, y **Listas Inteligentes compiladas directamente a consultas SQL parametrizadas** sobre índices B-Tree.
+   - Telemetría adaptativa con **0 % de uso de CPU en reposo**, eventos SSE en vivo (`watcher_indexed`, `watcher_removed`, `library_changed`) y endpoints REST paginados listos para cualquier interfaz personalizada (`/api/library/tracks?limit=&offset=`, `/api/library/db-stats`, `/api/dsp`, `/api/dsp/peq`, `/api/dsp/crossfeed`, `/api/dsp/convolver`, `/api/dsp/replaygain`, `/api/dsp/resampler`, `/api/tracks/:id/loudness`).
 
 ---
 
 ## Requisitos y Ejecución
 
 ### En Linux
-Dependencias de compilación estándar: `gcc`, `libasound2-dev` (ALSA), `nodejs >= 20` y opcionalmente `libgtk-3-dev` + `libwebkit2gtk-4.1-dev` para ventana nativa de escritorio.
+Dependencias de compilación estándar: `gcc`, `libasound2-dev` (ALSA), `nodejs >= 22.5` (con `node:sqlite` integrado) y opcionalmente `libgtk-3-dev` + `libwebkit2gtk-4.1-dev` para ventana nativa de escritorio.
 
 ```bash
 # Compilar binarios nativos optimizados (bin/ourmusic-engine y bin/ourmusic-gui)
@@ -50,12 +53,12 @@ npm run build:linux
 # Iniciar aplicación de escritorio (o servidor web local con npm run start:web)
 ./scripts/start-linux.sh
 
-# Ejecutar suite completa de 21 pruebas automatizadas
+# Ejecutar suite completa de 23 pruebas automatizadas
 npm test
 ```
 
 ### En Windows
-Dependencias: **Node.js >= 20** y un compilador C11 en `PATH` (**MinGW-w64 `gcc`** o **Visual Studio `cl.exe`** con Windows SDK).
+Dependencias: **Node.js >= 22.5** y un compilador C11 en `PATH` (**MinGW-w64 `gcc`** o **Visual Studio `cl.exe`** con Windows SDK).
 
 ```bat
 :: Compilar bin\ourmusic-engine.exe con soporte WASAPI Exclusive/Shared + ASIO Nativo

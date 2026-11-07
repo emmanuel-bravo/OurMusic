@@ -5,6 +5,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { readMetadata, writeMetadata } from '../tags/tagParser.mjs';
 import { EngineBridge } from '../engine/engineBridge.mjs';
+import { MusicDatabase } from '../db/musicDatabase.mjs';
+import { FolderWatcher } from './folderWatcher.mjs';
 
 export const SUPPORTED_AUDIO_EXTENSIONS = new Set([
   '.flac',
@@ -23,53 +25,100 @@ function makeTrackId(absPath) {
 }
 
 /**
- * Local Music Library Manager — performs bounded-concurrency parallel recursive directory scanning,
- * O(metadata) header-only tag indexing, ITU-R BS.1770-4 / EBU R128 loudness analysis,
- * cover art deduplication, fast search/filtering, and tag editing.
+ * Local Music Library Manager backed by Embedded SQLite (`data/ourmusic.db`, WAL + FTS5)
+ * and Real-Time Cross-Platform OS File Watching (`inotify` / `ReadDirectoryChangesW`).
  */
 export class LibraryManager extends EventEmitter {
-  constructor({ dataDir, engineBridge = null } = {}) {
+  constructor({
+    dataDir,
+    engineBridge = null,
+    database = null,
+    watchFolders = true,
+    watcherDebounceMs = 200,
+  } = {}) {
     super();
-    this.dataDir = dataDir;
+    this.dataDir = path.resolve(dataDir);
     this.engineBridge = engineBridge;
-    this.indexPath = path.join(dataDir, 'library.json');
-    this.coversDir = path.join(dataDir, 'covers');
-    this.tracksById = new Map();
-    this.tracksByPath = new Map();
-    this.watchedFolders = [];
+    this.coversDir = path.join(this.dataDir, 'covers');
+    fs.mkdirSync(this.coversDir, { recursive: true });
+
+    this._ownsDb = !database;
+    this.db = database || new MusicDatabase(this.dataDir);
+
     this.scanning = false;
     this.scanProgress = { scanned: 0, total: 0, currentFile: '' };
-    this._load();
-  }
 
-  _load() {
-    fs.mkdirSync(this.coversDir, { recursive: true });
-    if (!fs.existsSync(this.indexPath)) return;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(this.indexPath, 'utf8'));
-      if (Array.isArray(parsed.folders)) this.watchedFolders = parsed.folders;
-      if (Array.isArray(parsed.tracks)) {
-        for (const t of parsed.tracks) {
-          if (t && t.id && t.filePath) {
-            this.tracksById.set(t.id, t);
-            this.tracksByPath.set(t.filePath, t);
-          }
-        }
+    this.watcher = null;
+    if (watchFolders) {
+      this.watcher = new FolderWatcher({
+        supportedExtensions: SUPPORTED_AUDIO_EXTENSIONS,
+        debounceMs: watcherDebounceMs,
+        onFileChanged: (filePath) => this._onWatchedFileChanged(filePath),
+        onFileRemoved: (filePath) => this._onWatchedFileRemoved(filePath),
+        onDirectoryAdded: (dirPath) => this._onWatchedDirectoryAdded(dirPath),
+        onDirectoryRemoved: (dirPath) => this._onWatchedDirectoryRemoved(dirPath),
+      });
+      for (const folder of this.db.listFolders()) {
+        this.watcher.watchRoot(folder).catch(() => {});
       }
-    } catch {
-      // Corrupted index starts clean
     }
   }
 
+  get watchedFolders() {
+    return this.db.listFolders();
+  }
+
   _save() {
-    fs.mkdirSync(this.dataDir, { recursive: true });
-    const payload = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      folders: this.watchedFolders,
-      tracks: Array.from(this.tracksById.values()),
-    };
-    fs.writeFileSync(this.indexPath, JSON.stringify(payload, null, 2), 'utf8');
+    // No-op kept for backward compatibility: SQLite WAL commits atomically per transaction.
+  }
+
+  async _onWatchedFileChanged(filePath) {
+    if (this.scanning) return;
+    try {
+      const rec = await this.indexSingleFile(filePath);
+      if (rec) {
+        this.emit('watcher_indexed', rec);
+        this.emit('library_changed', { reason: 'file_changed', track: rec });
+      }
+    } catch {
+      // Ignore unreadable/incomplete external files
+    }
+  }
+
+  async _onWatchedFileRemoved(filePath) {
+    if (this.scanning) return;
+    const removed = this.db.deleteTrackByPath(filePath);
+    if (removed) {
+      this.emit('watcher_removed', { filePath });
+      this.emit('library_changed', { reason: 'file_removed', filePath });
+    }
+  }
+
+  async _onWatchedDirectoryAdded(dirPath) {
+    if (this.scanning) return;
+    const files = await this._collectAudioFiles(dirPath);
+    if (files.length === 0) return;
+    let indexedCount = 0;
+    for (const f of files) {
+      try {
+        await this.indexSingleFile(f);
+        indexedCount++;
+      } catch {
+        // continue
+      }
+    }
+    if (indexedCount > 0) {
+      this.emit('library_changed', { reason: 'directory_added', dirPath, indexedCount });
+    }
+  }
+
+  async _onWatchedDirectoryRemoved(dirPath) {
+    if (this.scanning) return;
+    const removedCount = this.db.deleteTracksUnderDir(dirPath);
+    if (removedCount > 0) {
+      this.emit('watcher_removed', { dirPath, removedCount });
+      this.emit('library_changed', { reason: 'directory_removed', dirPath, removedCount });
+    }
   }
 
   _cacheCoverArt(coverArt) {
@@ -124,12 +173,17 @@ export class LibraryManager extends EventEmitter {
     return results;
   }
 
-  async indexSingleFile(filePath, { saveAfter = false } = {}) {
+  async _prepareTrackPayload(filePath, { forceReindex = false, folderId = null } = {}) {
     const absPath = path.resolve(filePath);
     const stat = await fsp.stat(absPath);
-    const existing = this.tracksByPath.get(absPath);
-    if (existing && existing.mtimeMs === stat.mtimeMs && existing.sizeBytes === stat.size) {
-      return existing;
+    const existing = this.db.getTrackStatByPath(absPath);
+    if (
+      !forceReindex &&
+      existing &&
+      existing.mtimeMs === stat.mtimeMs &&
+      existing.sizeBytes === stat.size
+    ) {
+      return { unchanged: true, track: this.db.getTrackById(existing.id) };
     }
 
     const meta = await readMetadata(absPath, {
@@ -184,10 +238,21 @@ export class LibraryManager extends EventEmitter {
       addedAt: existing?.addedAt || new Date().toISOString(),
     };
 
-    this.tracksById.set(record.id, record);
-    this.tracksByPath.set(absPath, record);
-    if (saveAfter) this._save();
-    return record;
+    return {
+      unchanged: false,
+      record,
+      lyricsText: meta.lyrics || '',
+      folderId,
+    };
+  }
+
+  async indexSingleFile(filePath, { forceReindex = false, folderId = null } = {}) {
+    const prep = await this._prepareTrackPayload(filePath, { forceReindex, folderId });
+    if (prep.unchanged) return prep.track;
+    return this.db.upsertTrack(prep.record, {
+      lyricsText: prep.lyricsText,
+      folderId: prep.folderId,
+    });
   }
 
   async scanDirectory(dirPath) {
@@ -197,16 +262,15 @@ export class LibraryManager extends EventEmitter {
       throw new Error(`El directorio no existe o no es accesible: ${absDir}`);
     }
 
-    if (!this.watchedFolders.includes(absDir)) {
-      this.watchedFolders.push(absDir);
-    }
+    const folderRow = this.db.addFolder(absDir);
+    const folderId = folderRow?.id ?? null;
 
     this.scanning = true;
     const files = await this._collectAudioFiles(absDir);
     this.scanProgress = { scanned: 0, total: files.length, currentFile: '' };
     this.emit('scan_started', { directory: absDir, total: files.length });
 
-    const indexed = new Array(files.length);
+    const preparedPayloads = new Array(files.length);
     const errors = [];
     let cursor = 0;
     let completed = 0;
@@ -218,7 +282,7 @@ export class LibraryManager extends EventEmitter {
         if (idx >= files.length) break;
         const f = files[idx];
         try {
-          indexed[idx] = await this.indexSingleFile(f, { saveAfter: false });
+          preparedPayloads[idx] = await this._prepareTrackPayload(f, { folderId });
         } catch (err) {
           errors.push({ file: f, error: err.message });
         }
@@ -237,147 +301,94 @@ export class LibraryManager extends EventEmitter {
 
     await Promise.all(workers);
 
-    const validIndexed = indexed.filter(Boolean);
+    // Atomic batch upsert + deleted-file pruning inside a single SQLite WAL transaction!
+    const foundPaths = new Set(files);
+    let indexedCount = 0;
 
-    // Prune deleted files under absDir
-    for (const [p, trk] of this.tracksByPath.entries()) {
-      if (p.startsWith(absDir + path.sep) && !fs.existsSync(p)) {
-        this.tracksByPath.delete(p);
-        this.tracksById.delete(trk.id);
+    this.db.runInTransaction(() => {
+      for (const item of preparedPayloads) {
+        if (!item) continue;
+        if (item.unchanged) {
+          if (item.track) indexedCount++;
+        } else {
+          this.db.upsertTrack(item.record, {
+            lyricsText: item.lyricsText,
+            folderId: item.folderId,
+          });
+          indexedCount++;
+        }
       }
+
+      const existingUnderDir = this.db.listTracksUnderDir(absDir);
+      let prunedAny = false;
+      for (const row of existingUnderDir) {
+        if (!foundPaths.has(row.file_path) && !fs.existsSync(row.file_path)) {
+          this.db.stmts.deleteTrackByPath.run(row.file_path);
+          prunedAny = true;
+        }
+      }
+      if (prunedAny) {
+        this.db.pruneOrphanEntities();
+      }
+    });
+
+    if (this.watcher) {
+      await this.watcher.watchRoot(absDir).catch(() => {});
     }
 
     this.scanning = false;
     this.scanProgress = { scanned: files.length, total: files.length, currentFile: '' };
-    this._save();
+    const totalLibraryTracks = this.db.countTracks();
+
     this.emit('scan_completed', {
       directory: absDir,
-      indexedCount: validIndexed.length,
-      totalLibraryTracks: this.tracksById.size,
+      indexedCount,
+      totalLibraryTracks,
       errors,
     });
 
     return {
       directory: absDir,
-      indexedCount: validIndexed.length,
-      totalLibraryTracks: this.tracksById.size,
+      indexedCount,
+      totalLibraryTracks,
       errors,
     };
   }
 
   removeFolder(dirPath) {
     const absDir = path.resolve(dirPath);
-    this.watchedFolders = this.watchedFolders.filter((d) => d !== absDir);
-    for (const [p, trk] of this.tracksByPath.entries()) {
-      if (p === absDir || p.startsWith(absDir + path.sep)) {
-        this.tracksByPath.delete(p);
-        this.tracksById.delete(trk.id);
-      }
-    }
-    this._save();
+    this.watcher?.unwatchRoot(absDir);
+    this.db.removeFolderAndTracks(absDir);
   }
 
   getTrack(id) {
-    return this.tracksById.get(id) || null;
+    return this.db.getTrackById(id);
   }
 
   getTrackByPath(filePath) {
-    return this.tracksByPath.get(path.resolve(filePath)) || null;
+    return this.db.getTrackByPath(filePath);
   }
 
   getAllTracks() {
-    return Array.from(this.tracksById.values());
+    return this.db.queryTracksPaginated().tracks;
   }
 
-  queryTracks({
-    search = '',
-    codec = '',
-    artist = '',
-    album = '',
-    composer = '',
-    hiResOnly = false,
-    losslessOnly = false,
-    syncedLyricsOnly = false,
-    sortBy = 'title',
-    sortOrder = 'asc',
-  } = {}) {
-    const q = String(search || '').trim().toLowerCase();
-    const codecUpper = String(codec || '').trim().toUpperCase();
-    const artistLower = String(artist || '').trim().toLowerCase();
-    const albumLower = String(album || '').trim().toLowerCase();
-    const compLower = String(composer || '').trim().toLowerCase();
+  queryTracks(opts = {}) {
+    return this.db.queryTracksPaginated(opts).tracks;
+  }
 
-    const filtered = [];
-    for (const t of this.tracksById.values()) {
-      if (codecUpper && t.codec.toUpperCase() !== codecUpper) continue;
-      if (hiResOnly && !t.isHiRes) continue;
-      if (losslessOnly && !t.isLossless) continue;
-      if (syncedLyricsOnly && !t.hasSyncedLyrics) continue;
-      if (artistLower && t.artist.toLowerCase() !== artistLower) continue;
-      if (albumLower && t.album.toLowerCase() !== albumLower) continue;
-      if (compLower && !String(t.composer || '').toLowerCase().includes(compLower)) continue;
-
-      if (q) {
-        const hay = `${t.title} ${t.artist} ${t.album} ${t.composer} ${t.genre} ${t.codec} ${t.fileName}`.toLowerCase();
-        if (!hay.includes(q)) continue;
-      }
-      filtered.push(t);
-    }
-
-    const dir = sortOrder === 'desc' ? -1 : 1;
-    filtered.sort((a, b) => {
-      const va = a[sortBy] ?? '';
-      const vb = b[sortBy] ?? '';
-      if (typeof va === 'number' && typeof vb === 'number') {
-        return (va - vb) * dir;
-      }
-      return String(va).localeCompare(String(vb), 'es', { numeric: true, sensitivity: 'base' }) * dir;
-    });
-
-    return filtered;
+  queryTracksPaginated(opts = {}) {
+    return this.db.queryTracksPaginated(opts);
   }
 
   getSummary() {
-    const codecs = {};
-    const albums = new Map();
-    const artists = new Map();
-    let hiResCount = 0;
-    let totalDurationSec = 0;
+    return this.db.getSummary();
+  }
 
-    for (const t of this.tracksById.values()) {
-      codecs[t.codec] = (codecs[t.codec] || 0) + 1;
-      if (t.isHiRes) hiResCount++;
-      totalDurationSec += t.durationSec || 0;
-
-      const albKey = `${t.album}:::${t.artist}`;
-      if (!albums.has(albKey)) {
-        albums.set(albKey, {
-          album: t.album,
-          artist: t.artist,
-          year: t.year,
-          coverId: t.coverId,
-          trackCount: 0,
-        });
-      }
-      const alb = albums.get(albKey);
-      alb.trackCount++;
-      if (!alb.coverId && t.coverId) alb.coverId = t.coverId;
-
-      artists.set(t.artist, (artists.get(t.artist) || 0) + 1);
-    }
-
+  getDatabaseStats() {
     return {
-      totalTracks: this.tracksById.size,
-      totalAlbums: albums.size,
-      totalArtists: artists.size,
-      hiResCount,
-      totalDurationSec,
-      codecs,
-      folders: this.watchedFolders,
-      albums: Array.from(albums.values()).sort((a, b) => a.album.localeCompare(b.album, 'es')),
-      artists: Array.from(artists.entries())
-        .map(([name, trackCount]) => ({ name, trackCount }))
-        .sort((a, b) => a.name.localeCompare(b.name, 'es')),
+      ...this.db.getStats(),
+      activeWatchers: this.watcher ? this.watcher.watchedRootCount() : 0,
     };
   }
 
@@ -400,8 +411,7 @@ export class LibraryManager extends EventEmitter {
     const trk = this.getTrack(trackId);
     if (!trk) throw new Error('Pista no encontrada en biblioteca');
     await writeMetadata(trk.filePath, patch);
-    trk.mtimeMs = 0;
-    const updated = await this.indexSingleFile(trk.filePath, { saveAfter: true });
+    const updated = await this.indexSingleFile(trk.filePath, { forceReindex: true });
     this.emit('track_updated', updated);
     return this.getTrackFullMetadata(updated.id);
   }
@@ -414,11 +424,8 @@ export class LibraryManager extends EventEmitter {
       ? await this.engineBridge.scanLoudness(trk.filePath)
       : await EngineBridge.scanLoudnessCli(trk.filePath);
 
-    trk.integratedLufs = res.integratedLufs;
-    trk.loudnessRangeLu = res.loudnessRangeLu;
-    trk.truePeakDbtp = res.truePeakDbtp;
-    trk.replayGainTrackDb = res.replayGain18Db;
-    trk.replayGainTrackPeak = res.truePeak;
+    let mtimeMs = trk.mtimeMs;
+    let sizeBytes = trk.sizeBytes;
 
     if (writeTags) {
       await writeMetadata(trk.filePath, {
@@ -426,12 +433,29 @@ export class LibraryManager extends EventEmitter {
         replayGainTrackPeak: res.truePeak,
       });
       const st = await fsp.stat(trk.filePath);
-      trk.mtimeMs = st.mtimeMs;
-      trk.sizeBytes = st.size;
+      mtimeMs = st.mtimeMs;
+      sizeBytes = st.size;
     }
 
-    this._save();
-    this.emit('track_updated', trk);
-    return { track: trk, loudness: res };
+    const updated = this.db.updateTrackLoudness(trk.id, {
+      integratedLufs: res.integratedLufs,
+      loudnessRangeLu: res.loudnessRangeLu,
+      truePeakDbtp: res.truePeakDbtp,
+      replayGainTrackDb: res.replayGain18Db,
+      replayGainTrackPeak: res.truePeak,
+      mtimeMs,
+      sizeBytes,
+    });
+
+    this.emit('track_updated', updated);
+    return { track: updated, loudness: res };
+  }
+
+  close() {
+    this.watcher?.close();
+    this.watcher = null;
+    if (this._ownsDb && this.db) {
+      this.db.close();
+    }
   }
 }
