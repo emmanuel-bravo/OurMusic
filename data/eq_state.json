@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "numBands": 10,
+  "preampDb": 0,
+  "gains": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "smoothingEnabled": false,
+  "limiterEnabled": true,
+  "customHookEnabled": false,
+  "stereoWidth": 1,
+  "activePresetId": "flat"
+}

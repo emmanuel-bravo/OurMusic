@@ -1,0 +1,16 @@
+# Herramientas locales aisladas para este proyecto (REA)
+.tools/
+.agents/
+
+# Binarios compilados y datos de usuario en ejecución
+bin/
+build/
+data/library.json
+data/playlists.json
+data/user_presets.json
+tests/fixtures/
+tests/tmp/
+*.o
+*.exe
+*.so
+*.dll
