@@ -1,0 +1,81 @@
+/*
+ * OurMusic — Design Tokens (Ronda 1)
+ * Estilo: oscuro inmersivo «sala de escucha» (negro cálido / grafito).
+ * El acento (--accent*) lo sobrescribe en tiempo real el extractor de color
+ * (Color Thievery) con contraste AA garantizado sobre --bg-0.
+ */
+@font-face {
+  font-family: 'Inter';
+  src: url('../fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+:root {
+  /* Superficies (grafito cálido) */
+  --bg-0: #0d0c0b;          /* fondo base de la app */
+  --bg-1: #131211;          /* sidebar y barra inferior */
+  --bg-2: #1a1917;          /* tarjetas, popovers */
+  --bg-3: #23211f;          /* hover, inputs */
+  --bg-4: #2d2a27;          /* activo / pressed */
+  --scrim: rgba(8, 7, 6, 0.62);
+
+  --line-1: rgba(255, 238, 214, 0.06);
+  --line-2: rgba(255, 238, 214, 0.11);
+  --line-3: rgba(255, 238, 214, 0.18);
+
+  /* Texto */
+  --text-1: #f5f0e9;
+  --text-2: #b8b0a6;
+  --text-3: #80786f;
+  --text-4: #5a544e;
+  --text-on-accent: #0d0c0b;
+
+  /* Acento dinámico (valor por defecto: ámbar cálido) */
+  --accent: #e3a86b;
+  --accent-rgb: 227, 168, 107;
+  --accent-soft: rgba(var(--accent-rgb), 0.14);
+  --accent-glow: rgba(var(--accent-rgb), 0.32);
+
+  /* Estado de la señal */
+  --ok: #62d394;            /* bit-perfect */
+  --ok-soft: rgba(98, 211, 148, 0.12);
+  --warn: #ebb24d;          /* resampleo / DSP activo */
+  --warn-soft: rgba(235, 178, 77, 0.13);
+  --danger: #f06b5e;
+
+  /* Tipografía */
+  --font: 'Inter', system-ui, 'Segoe UI', sans-serif;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-28: 28px;
+  --fs-48: 48px;
+
+  /* Radios y espaciado */
+  --r-4: 4px;
+  --r-6: 6px;
+  --r-8: 8px;
+  --r-10: 10px;
+  --r-14: 14px;
+  --r-pill: 999px;
+
+  /* Elevación */
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* Movimiento (microinteracciones < 200 ms) */
+  --t-fast: 120ms cubic-bezier(0.2, 0, 0, 1);
+  --t-med: 180ms cubic-bezier(0.2, 0, 0, 1);
+  --t-color: 600ms ease;
+
+  /* Layout */
+  --sidebar-w: 240px;
+  --sidebar-w-compact: 72px;
+  --topbar-h: 60px;
+  --npbar-h: 88px;
+}

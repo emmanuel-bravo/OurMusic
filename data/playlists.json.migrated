@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "playlists": [],
+  "smartPlaylists": [
+    {
+      "id": "smart_hires",
+      "name": "Hi-Res y DSD Audiófilo",
+      "match": "any",
+      "rules": [
+        {
+          "field": "sampleRate",
+          "operator": "gt",
+          "value": 48000
+        },
+        {
+          "field": "bitDepth",
+          "operator": "gt",
+          "value": 16
+        },
+        {
+          "field": "codec",
+          "operator": "equals",
+          "value": "DSD"
+        }
+      ],
+      "sortBy": "sampleRate",
+      "sortOrder": "desc",
+      "limit": 200
+    },
+    {
+      "id": "smart_synced_lyrics",
+      "name": "Con Letras Sincronizadas",
+      "match": "all",
+      "rules": [
+        {
+          "field": "hasSyncedLyrics",
+          "operator": "is_true",
+          "value": true
+        }
+      ],
+      "sortBy": "title",
+      "sortOrder": "asc",
+      "limit": 200
+    },
+    {
+      "id": "smart_lossless",
+      "name": "Colección Sin Pérdida (Lossless)",
+      "match": "all",
+      "rules": [
+        {
+          "field": "isLossless",
+          "operator": "is_true",
+          "value": true
+        }
+      ],
+      "sortBy": "album",
+      "sortOrder": "asc",
+      "limit": 500
+    }
+  ]
+}

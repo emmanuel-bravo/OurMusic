@@ -1,0 +1,2126 @@
+/*
+ * OurMusic — Estilos de Componentes y Artboards (Ronda 1)
+ * Oscuro inmersivo «sala de escucha», tipografía Inter + números tabulares,
+ * Color Thievery con contraste AA garantizado y microinteracciones < 200 ms.
+ */
+@import url('./tokens.css');
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background: #070606;
+  color: var(--text-1);
+  font-family: var(--font);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Iconos SVG propios (trazo 1.75 px, esquinas redondeadas) */
+.ic {
+  display: inline-block;
+  vertical-align: middle;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+.ic .f {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Barra superior del visor de bocetos (Figma Code Layer Switcher) */
+.proto-Dock {
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 24px;
+  background: rgba(13, 12, 11, 0.92);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line-2);
+}
+
+.proto-Dock__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: var(--fs-13);
+  color: var(--text-1);
+}
+
+.proto-Dock__badge {
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-11);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.proto-Dock__tabs,
+.proto-Dock__sizes {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.proto-Tab {
+  appearance: none;
+  border: 1px solid var(--line-2);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: var(--r-6);
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.proto-Tab:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+.proto-Tab.is-active {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Lienzo de Artboards */
+.proto-Canvas {
+  padding: 28px 32px 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 44px;
+}
+
+.artboard-Wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.artboard-Header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  padding: 0 4px;
+}
+.artboard-Header strong {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.artboard-Meta {
+  font-family: var(--font);
+  font-size: var(--fs-11);
+  color: var(--text-3);
+  background: var(--bg-2);
+  padding: 2px 8px;
+  border-radius: var(--r-4);
+  border: 1px solid var(--line-1);
+}
+
+/* ============================================================================
+   VENTANA PRINCIPAL DE OURMUSIC (1440×900 y 1280×720)
+   ============================================================================ */
+.om-Window {
+  position: relative;
+  width: 1440px;
+  height: 900px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  border-radius: var(--r-14);
+  border: 1px solid var(--line-2);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.75);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: 1fr var(--npbar-h);
+  grid-template-areas:
+    'sidebar main'
+    'npbar   npbar';
+}
+
+.om-Window.is-1280 {
+  width: 1280px;
+  height: 720px;
+  grid-template-columns: var(--sidebar-w-compact) 1fr;
+}
+
+/* ---------------- 1. SIDEBAR LATERAL ---------------- */
+.om-Sidebar {
+  grid-area: sidebar;
+  background: var(--bg-1);
+  border-right: 1px solid var(--line-1);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  user-select: none;
+  overflow: hidden;
+}
+
+.om-Brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  gap: 10px;
+}
+
+.om-Brand__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Espacio reservado para el logo propio del usuario */
+.om-LogoSlot {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-8);
+  border: 1.5px dashed rgba(var(--accent-rgb), 0.55);
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.16), rgba(255, 255, 255, 0.02));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.om-Brand__title {
+  font-size: var(--fs-16);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.om-IconBtn {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-6);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.om-IconBtn:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+
+.om-NavGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.om-NavGroup__label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  padding: 0 10px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.om-NavItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: var(--r-8);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.om-NavItem__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.om-NavItem__text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.om-NavItem__count {
+  font-size: var(--fs-11);
+  color: var(--text-3);
+}
+.om-NavItem:hover {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+.om-NavItem.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.om-NavItem.is-active .om-NavItem__count {
+  color: var(--accent);
+}
+
+.om-Sidebar__footer {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.om-WatcherPill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--r-6);
+  background: rgba(98, 211, 148, 0.07);
+  border: 1px solid rgba(98, 211, 148, 0.16);
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+.om-Dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+  flex-shrink: 0;
+}
+
+/* Sidebar compacta en 1280×720 */
+.om-Window.is-1280 .om-Brand__title,
+.om-Window.is-1280 .om-NavGroup__label,
+.om-Window.is-1280 .om-NavItem__text,
+.om-Window.is-1280 .om-NavItem__count,
+.om-Window.is-1280 .om-WatcherPill span,
+.om-Window.is-1280 .om-Brand .om-IconBtn {
+  display: none;
+}
+.om-Window.is-1280 .om-Brand,
+.om-Window.is-1280 .om-NavItem,
+.om-Window.is-1280 .om-WatcherPill {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* ---------------- 2. ZONA CENTRAL + TOPBAR ---------------- */
+.om-Main {
+  grid-area: main;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background:
+    radial-gradient(900px 380px at 18% 0%, rgba(var(--accent-rgb), 0.11), transparent 70%),
+    var(--bg-0);
+}
+
+.om-Topbar {
+  height: var(--topbar-h);
+  padding: 0 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line-1);
+  background: rgba(13, 12, 11, 0.72);
+  backdrop-filter: blur(12px);
+  flex-shrink: 0;
+  z-index: 30;
+}
+
+/* Migas de Pan (Breadcrumbs) */
+.om-Breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-13);
+  color: var(--text-2);
+  min-width: 0;
+}
+.om-HistoryBtns {
+  display: flex;
+  gap: 4px;
+  margin-right: 6px;
+}
+.om-Crumb {
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.om-Crumb.is-current {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.om-CrumbSep {
+  color: var(--text-4);
+  font-size: var(--fs-11);
+}
+
+/* Buscador Global Instantáneo (SQLite FTS5) */
+.om-SearchBox {
+  position: relative;
+  width: 420px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: var(--r-pill);
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  color: var(--text-1);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.om-SearchBox.is-focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--bg-3);
+}
+.om-SearchBox__input {
+  flex: 1;
+  font-size: var(--fs-13);
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.om-SearchBox__placeholder {
+  color: var(--text-3);
+}
+.om-Kbd {
+  font-family: var(--font);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: var(--r-4);
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  color: var(--text-3);
+}
+
+.om-Topbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.om-Segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: var(--r-8);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+}
+.om-Segmented__btn {
+  padding: 4px 8px;
+  border-radius: var(--r-6);
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.om-Segmented__btn.is-active {
+  background: var(--bg-4);
+  color: var(--text-1);
+}
+
+/* ---------------- 3. CUADRÍCULA DE ÁLBUMES ---------------- */
+.om-Content {
+  flex: 1;
+  padding: 22px 28px 28px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.om-SectionToolbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.om-SectionToolbar__title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.om-SectionToolbar__title h1 {
+  font-size: var(--fs-28);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+.om-SectionToolbar__sub {
+  font-size: var(--fs-13);
+  color: var(--text-2);
+}
+
+.om-FilterPills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.om-Pill {
+  padding: 5px 11px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.om-Pill.is-active {
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.om-AlbumGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 20px 18px;
+}
+
+.om-AlbumCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  cursor: pointer;
+}
+.om-AlbumCard__art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--r-10);
+  overflow: hidden;
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  box-shadow: var(--shadow-card);
+}
+.om-AlbumCard__art .cover-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.om-AlbumCard__badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 2px 6px;
+  border-radius: var(--r-4);
+  background: rgba(13, 12, 11, 0.78);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--line-2);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-1);
+}
+.om-AlbumCard__badge.is-hires {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.45);
+}
+.om-AlbumCard__play {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transform: translateY(4px);
+}
+.om-AlbumCard.is-hovered .om-AlbumCard__play,
+.om-AlbumCard.is-playing .om-AlbumCard__play {
+  opacity: 1;
+  transform: translateY(0);
+}
+.om-AlbumCard.is-hovered .om-AlbumCard__art {
+  border-color: var(--line-3);
+}
+.om-AlbumCard__title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.om-AlbumCard__sub {
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------------- 4. NOW PLAYING BAR (PERSISTENTE) ---------------- */
+.om-NowPlaying {
+  grid-area: npbar;
+  position: relative;
+  height: var(--npbar-h);
+  padding: 0 22px;
+  background:
+    linear-gradient(90deg, rgba(var(--accent-rgb), 0.14) 0%, rgba(19, 18, 17, 0.96) 38%, rgba(19, 18, 17, 0.98) 100%);
+  border-top: 1px solid var(--line-2);
+  display: grid;
+  grid-template-columns: 330px 1fr 370px;
+  align-items: center;
+  gap: 24px;
+  z-index: 40;
+}
+.om-Window.is-1280 .om-NowPlaying {
+  grid-template-columns: 290px 1fr 330px;
+  gap: 16px;
+}
+
+/* Izquierda: Mini carátula + metadatos */
+.om-NP__track {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.om-NP__art {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-8);
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  flex-shrink: 0;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.om-NP__art .cover-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.om-NP__meta {
+  min-width: 0;
+  flex: 1;
+}
+.om-NP__titleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.om-NP__title {
+  font-size: var(--fs-14);
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.om-NP__artist {
+  font-size: var(--fs-12);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+/* Centro: Transporte + Waveform Seekbar */
+.om-NP__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.om-Transport {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.om-PlayBtn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 16px var(--accent-glow);
+}
+
+.om-WaveformRow {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.om-Time {
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  width: 32px;
+}
+.om-Time.is-end {
+  text-align: right;
+  color: var(--text-3);
+}
+.om-Waveform {
+  flex: 1;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.om-WaveBar {
+  flex: 1;
+  border-radius: 2px;
+  background: rgba(245, 240, 233, 0.22);
+}
+.om-WaveBar.is-played {
+  background: var(--accent);
+}
+.om-WaveBar.is-head {
+  background: #ffffff;
+  box-shadow: 0 0 6px var(--accent);
+}
+
+/* Derecha: Insignia Hi-Fi + Chip Salida + Volumen + Toggles de Panel */
+.om-NP__right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.om-HiFiBadges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 5px 10px;
+  border-radius: var(--r-8);
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  cursor: pointer;
+}
+.om-HiFiBadges.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.om-HiFiBadges__src {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: 0.01em;
+}
+.om-HiFiBadges__out {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ok);
+}
+.om-HiFiBadges__out .om-Dot {
+  width: 6px;
+  height: 6px;
+}
+
+.om-Volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.om-VolTrack {
+  width: 68px;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--bg-4);
+  overflow: hidden;
+}
+.om-VolFill {
+  width: 78%;
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+}
+
+.om-DrawerToggles {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--line-1);
+}
+
+/* ============================================================================
+   FRAME 2: DESPLEGABLE DE BÚSQUEDA GLOBAL INSTANTÁNEA (SQLite FTS5)
+   ============================================================================ */
+.om-Scrim {
+  position: absolute;
+  inset: var(--topbar-h) 0 0 0;
+  background: var(--scrim);
+  backdrop-filter: blur(4px);
+  z-index: 50;
+}
+
+.om-SearchDropdown {
+  position: absolute;
+  top: calc(var(--topbar-h) - 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 740px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-14);
+  box-shadow: var(--shadow-pop);
+  z-index: 60;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.om-SearchDropdown__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line-1);
+  font-size: var(--fs-11);
+  color: var(--text-2);
+}
+.om-SearchDropdown__perf {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.om-SearchDropdown__body {
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  gap: 16px;
+}
+
+/* Mejor resultado destacado */
+.om-TopHit {
+  background: linear-gradient(160deg, rgba(var(--accent-rgb), 0.16), var(--bg-3));
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  border-radius: var(--r-10);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.om-TopHit__label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+.om-TopHit__art {
+  width: 88px;
+  height: 88px;
+  border-radius: var(--r-8);
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+}
+.om-TopHit__title {
+  font-size: var(--fs-16);
+  font-weight: 700;
+  color: var(--text-1);
+}
+.om-TopHit__sub {
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+.om-TopHit__actions {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.om-BtnPrimary {
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: var(--fs-12);
+  font-weight: 600;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.om-BtnGhost {
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  color: var(--text-1);
+  border: 1px solid var(--line-2);
+  font-size: var(--fs-12);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.om-SearchGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.om-SearchGroup__title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.om-SearchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: var(--r-6);
+  font-size: var(--fs-12);
+}
+.om-SearchRow.is-selected {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+}
+.om-SearchRow__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.om-MiniThumb {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-4);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.om-AvatarInitials {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  flex-shrink: 0;
+}
+.om-Highlight {
+  color: var(--accent);
+  font-weight: 600;
+  background: var(--accent-soft);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+.om-LyricSnippet {
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  font-style: italic;
+}
+
+.om-SearchDropdown__foot {
+  padding: 9px 16px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-11);
+  color: var(--text-2);
+}
+.om-SearchDropdown__link {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ============================================================================
+   FRAME 3: VISTA DETALLADA DE ÁLBUM (HERO + PISTAS)
+   ============================================================================ */
+.om-AlbumHero {
+  display: flex;
+  align-items: flex-end;
+  gap: 26px;
+  padding: 22px 28px;
+  background:
+    radial-gradient(680px 260px at 12% 20%, rgba(var(--accent-rgb), 0.25), transparent 75%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  border-bottom: 1px solid var(--line-1);
+}
+.om-AlbumHero__cover {
+  width: 176px;
+  height: 176px;
+  border-radius: var(--r-10);
+  overflow: hidden;
+  border: 1px solid var(--line-3);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
+  flex-shrink: 0;
+}
+.om-Window.is-1280 .om-AlbumHero__cover {
+  width: 144px;
+  height: 144px;
+}
+.om-AlbumHero__info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.om-AlbumHero__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-11);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+.om-AlbumHero__title {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+.om-Window.is-1280 .om-AlbumHero__title {
+  font-size: 26px;
+}
+.om-AlbumHero__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-13);
+  color: var(--text-2);
+  flex-wrap: wrap;
+}
+.om-AlbumHero__actions {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.om-TrackTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+}
+.om-TrackTable th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-1);
+}
+.om-TrackTable td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-1);
+  color: var(--text-2);
+}
+.om-TrackTable tr.is-playing td {
+  background: var(--accent-soft);
+  color: var(--text-1);
+}
+.om-TrackTable tr.is-playing .om-TrackTitle {
+  color: var(--accent);
+  font-weight: 600;
+}
+.om-TrackTitle {
+  color: var(--text-1);
+  font-weight: 500;
+}
+.om-TagMini {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--r-4);
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text-2);
+  margin-left: 8px;
+}
+
+/* ============================================================================
+   FRAME 4: POPOVER «RUTA DE SEÑAL» (SIGNAL PATH BIT-PERFECT)
+   ============================================================================ */
+.om-SignalPopover {
+  position: absolute;
+  right: 96px;
+  bottom: calc(var(--npbar-h) + 12px);
+  width: 360px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-14);
+  box-shadow: var(--shadow-pop);
+  padding: 16px;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.om-SignalPopover__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-1);
+}
+.om-SignalPopover__title {
+  font-size: var(--fs-14);
+  font-weight: 700;
+  color: var(--text-1);
+}
+.om-SignalBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: var(--ok-soft);
+  border: 1px solid rgba(98, 211, 148, 0.35);
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.om-SignalChain {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+}
+.om-SignalNode {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--r-8);
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+}
+.om-SignalNode__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-6);
+  background: var(--bg-3);
+  color: var(--ok);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.om-SignalNode__body {
+  flex: 1;
+  min-width: 0;
+}
+.om-SignalNode__name {
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.om-SignalNode__detail {
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  margin-top: 2px;
+}
+.om-SignalNode__tag {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ok);
+}
+
+/* ============================================================================
+   RONDA 2: BARRA DE PROGRESO LINEAL LIMPIA (SIN FORMA DE ONDA)
+   ============================================================================ */
+.om-SeekRow {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.om-SeekBar {
+  flex: 1;
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: rgba(245, 240, 233, 0.14);
+  position: relative;
+  cursor: pointer;
+}
+
+.om-SeekFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+}
+
+.om-SeekThumb {
+  position: absolute;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  transform: translate(-50%, -50%);
+}
+
+/* ============================================================================
+   RONDA 2 — FRAME 1: TABLA VIRTUALIZADA DE PISTAS + SELECTOR DE COLUMNAS
+   ============================================================================ */
+.om-DataGridWrap {
+  position: relative;
+  flex: 1;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-10);
+  background: rgba(19, 18, 17, 0.55);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.om-DataGrid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+}
+
+.om-DataGrid thead th {
+  background: var(--bg-1);
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--line-2);
+  text-align: left;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.om-DataGrid thead th.is-sorted {
+  color: var(--accent);
+}
+
+.om-DataGrid tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-1);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.om-DataGrid tbody tr:hover td {
+  background: var(--bg-3);
+}
+
+.om-DataGrid tbody tr.is-playing td {
+  background: var(--accent-soft);
+  color: var(--text-1);
+}
+
+.om-TrackCell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.om-FormatChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--r-4);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text-2);
+}
+
+.om-FormatChip.is-hires {
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  color: var(--accent);
+}
+
+/* Popover de personalización de columnas (clic derecho en cabecera) */
+.om-ColPicker {
+  position: absolute;
+  top: 38px;
+  right: 18px;
+  width: 248px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-10);
+  box-shadow: var(--shadow-pop);
+  padding: 10px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.om-ColPicker__title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+  padding: 2px 6px 6px;
+  border-bottom: 1px solid var(--line-1);
+  margin-bottom: 2px;
+}
+
+.om-ColPicker__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: var(--r-6);
+  font-size: var(--fs-12);
+  color: var(--text-2);
+}
+
+.om-ColPicker__item.is-checked {
+  color: var(--text-1);
+  font-weight: 500;
+}
+
+.om-CheckBox {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--line-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-1);
+}
+
+.om-ColPicker__item.is-checked .om-CheckBox {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+/* ============================================================================
+   RONDA 2 — PANEL DERECHO DESLIZABLE (COLA / DSP / LETRAS)
+   ============================================================================ */
+.om-MainSplit {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  overflow: hidden;
+  position: relative;
+}
+
+.om-Window.is-1280 .om-MainSplit {
+  grid-template-columns: 1fr;
+}
+
+.om-Drawer {
+  background: var(--bg-1);
+  border-left: 1px solid var(--line-2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 45;
+}
+
+.om-Window.is-1280 .om-Drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 390px;
+  box-shadow: -20px 0 50px rgba(0, 0, 0, 0.7);
+}
+
+.om-Drawer__head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.om-Drawer__title {
+  font-size: var(--fs-16);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.om-Drawer__body {
+  flex: 1;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: hidden;
+}
+
+/* Cola de Reproducción en 2 bloques */
+.om-QueueSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.om-QueueSection__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
+  padding: 0 4px;
+}
+
+.om-QueueSection__badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.om-QueueItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--r-8);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+}
+
+.om-QueueItem.is-current {
+  background: linear-gradient(90deg, var(--accent-soft), var(--bg-2));
+  border-color: rgba(var(--accent-rgb), 0.4);
+}
+
+.om-QueueItem.is-dragging {
+  border-color: var(--accent);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+}
+
+.om-QueueItem__grip {
+  color: var(--text-4);
+  cursor: grab;
+}
+
+.om-QueueItem__meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.om-QueueItem__title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.om-QueueItem__sub {
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================================
+   RONDA 2 — CONSOLA DSP / ECUALIZADOR (PESTAÑA EQ + PESTAÑA AVANZADO)
+   ============================================================================ */
+.om-EqCurveBox {
+  background: var(--bg-0);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-10);
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.om-EqCurveBox__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.om-EqCurveSvg {
+  width: 100%;
+  height: 86px;
+  display: block;
+}
+
+.om-FadersGrid {
+  display: grid;
+  grid-template-columns: repeat(11, 1fr);
+  gap: 4px;
+  padding: 12px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-10);
+  align-items: center;
+}
+
+.om-FaderCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.om-FaderCol.is-preamp {
+  padding-right: 6px;
+  border-right: 1px solid var(--line-2);
+}
+
+.om-FaderGain {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.om-FaderTrack {
+  width: 6px;
+  height: 128px;
+  border-radius: var(--r-pill);
+  background: var(--bg-0);
+  border: 1px solid var(--line-1);
+  position: relative;
+}
+
+.om-FaderZero {
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  top: 50%;
+  height: 1px;
+  background: var(--line-3);
+}
+
+.om-FaderFill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: var(--accent);
+  border-radius: var(--r-pill);
+}
+
+.om-FaderKnob {
+  position: absolute;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-1);
+  border: 2.5px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  transform: translate(-50%, -50%);
+}
+
+.om-FaderFreq {
+  font-size: 10px;
+  color: var(--text-3);
+  font-weight: 600;
+}
+
+.om-DspSwitchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-8);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  font-size: var(--fs-12);
+}
+
+.om-Toggle {
+  width: 34px;
+  height: 19px;
+  border-radius: var(--r-pill);
+  background: var(--bg-4);
+  position: relative;
+  display: inline-block;
+}
+
+.om-Toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--text-2);
+}
+
+.om-Toggle.is-on {
+  background: var(--accent);
+}
+
+.om-Toggle.is-on::after {
+  left: 17px;
+  background: var(--text-on-accent);
+}
+
+.om-DspModuleCard {
+  padding: 10px 12px;
+  border-radius: var(--r-8);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.om-DspModuleCard__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.om-DspModuleCard__sub {
+  font-size: var(--fs-11);
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ============================================================================
+   RONDA 2 — VISTA INMERSIVA «AHORA SUENA» + LETRAS SINCRONIZADAS (.LRC)
+   ============================================================================ */
+.om-Immersive {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  position: relative;
+  background:
+    radial-gradient(640px 520px at 24% 42%, rgba(var(--accent-rgb), 0.30), transparent 72%),
+    radial-gradient(560px 460px at 78% 25%, rgba(91, 127, 184, 0.18), transparent 70%),
+    #0a0908;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 26px 48px 30px;
+  overflow: hidden;
+}
+
+.om-Immersive__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.om-Immersive__stage {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 420px 1fr;
+  align-items: center;
+  gap: 64px;
+  max-width: 1220px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.om-Window.is-1280 .om-Immersive__stage {
+  grid-template-columns: 330px 1fr;
+  gap: 44px;
+}
+
+.om-Immersive__vinyl {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.om-Immersive__art {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--r-14);
+  overflow: hidden;
+  border: 1px solid var(--line-3);
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.75);
+}
+
+.om-LyricsStage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.om-LyricLine {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: rgba(245, 240, 233, 0.28);
+  padding: 4px 10px;
+  border-radius: var(--r-8);
+}
+
+.om-Window.is-1280 .om-LyricLine {
+  font-size: 18px;
+}
+
+.om-LyricLine.is-past {
+  color: rgba(245, 240, 233, 0.42);
+}
+
+.om-LyricLine.is-active {
+  font-size: 28px;
+  color: var(--text-1);
+  background: rgba(var(--accent-rgb), 0.12);
+  border-left: 3px solid var(--accent);
+  padding-left: 14px;
+}
+
+.om-Window.is-1280 .om-LyricLine.is-active {
+  font-size: 22px;
+}
+
+.om-LyricTime {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+/* ============================================================================
+   RONDA 2 — CUADRÍCULA DE ARTISTAS (AVATARES DE INICIALES) Y GÉNEROS
+   ============================================================================ */
+.om-ArtistGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.om-ArtistCard {
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-10);
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+}
+
+.om-ArtistCard__avatar {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text-1);
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+}
+
+.om-GenreGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.om-GenreCard {
+  padding: 16px 18px;
+  border-radius: var(--r-10);
+  border: 1px solid var(--line-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ============================================================================
+   RONDA 3 — INSPECTOR DE METADATOS / EDITOR DE ETIQUETAS (MODAL + LOTES)
+   ============================================================================ */
+.om-ModalBackdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 7, 6, 0.72);
+  backdrop-filter: blur(6px);
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.om-Modal {
+  width: 820px;
+  max-width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-14);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.om-Modal__head {
+  padding: 14px 20px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.om-Modal__title {
+  font-size: var(--fs-16);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.om-Modal__body {
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: 1fr 270px;
+  gap: 20px;
+}
+
+.om-FormGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+}
+
+.om-Field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.om-Field.is-full {
+  grid-column: 1 / -1;
+}
+
+.om-Field__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.om-Field__input {
+  padding: 7px 10px;
+  border-radius: var(--r-6);
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  color: var(--text-1);
+  font-size: var(--fs-13);
+}
+
+.om-Field__input.is-mixed {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.4);
+  font-style: italic;
+}
+
+.om-TechCard {
+  background: var(--bg-1);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-10);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.om-TechRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--fs-12);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-1);
+}
+
+.om-TechRow:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.om-Modal__foot {
+  padding: 12px 20px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ============================================================================
+   RONDA 3 — MENÚ CONTEXTUAL (CLIC DERECHO) + TOOLTIPS + TOASTS
+   ============================================================================ */
+.om-ContextMenu {
+  position: absolute;
+  width: 276px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-3);
+  border-radius: var(--r-10);
+  box-shadow: var(--shadow-pop);
+  padding: 6px;
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.om-ContextItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--r-6);
+  font-size: var(--fs-12);
+  color: var(--text-1);
+}
+
+.om-ContextItem.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.om-ContextItem.is-danger {
+  color: var(--danger);
+}
+
+.om-ContextSep {
+  height: 1px;
+  background: var(--line-1);
+  margin: 4px 6px;
+}
+
+.om-TooltipBubble {
+  position: absolute;
+  padding: 5px 10px;
+  border-radius: var(--r-6);
+  background: var(--bg-1);
+  border: 1px solid var(--line-3);
+  box-shadow: var(--shadow-card);
+  font-size: 11px;
+  color: var(--text-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 76;
+}
+
+.om-ToastStack {
+  position: absolute;
+  right: 24px;
+  bottom: calc(var(--npbar-h) + 16px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 78;
+}
+
+.om-Toast {
+  width: 348px;
+  padding: 11px 14px;
+  border-radius: var(--r-10);
+  background: var(--bg-2);
+  border: 1px solid var(--line-3);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ============================================================================
+   RONDA 3 — ESTADO VACÍO Y ONBOARDING + EXPLORADOR DE CARPETAS + ATAJOS
+   ============================================================================ */
+.om-EmptyHero {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px;
+  gap: 18px;
+}
+
+.om-EmptyArt {
+  width: 96px;
+  height: 96px;
+  border-radius: 26px;
+  background: radial-gradient(circle at 30% 30%, var(--accent-soft), var(--bg-2));
+  border: 1px solid rgba(var(--accent-rgb), 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+}
+
+.om-OnboardCards {
+  display: grid;
+  grid-template-columns: repeat(3, 240px);
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.om-OnboardCard {
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-10);
+  padding: 14px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.om-SubfolderRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.om-SubfolderCard {
+  padding: 10px 12px;
+  border-radius: var(--r-8);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.om-ShortcutsCols {
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+}
+
+.om-ShortcutRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-1);
+  font-size: var(--fs-12);
+}
+
+

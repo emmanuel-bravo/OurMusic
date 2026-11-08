@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OurMusic — Reproductor HiFi Local</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Barra lateral izquierda -->
+    <aside class="sidebar">
+      <div class="brand">
+        <svg class="brand-logo" viewBox="0 0 44 44" aria-hidden="true">
+          <defs>
+            <linearGradient id="omGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#38bdf8" />
+              <stop offset="100%" stop-color="#10b981" />
+            </linearGradient>
+          </defs>
+          <circle cx="22" cy="22" r="19" fill="none" stroke="url(#omGrad)" stroke-width="2.5" />
+          <circle cx="22" cy="22" r="11" fill="none" stroke="#38bdf8" stroke-opacity="0.35" stroke-width="1.5" />
+          <path d="M13 24 L17 16 L21 28 L25 14 L29 26 L32 21" fill="none" stroke="url(#omGrad)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div>
+          <div class="brand-title">OurMusic</div>
+          <div class="brand-sub" id="platformBadge">Motor C11 · HiFi Clean-Room</div>
+        </div>
+      </div>
+
+      <div class="signal-card" id="sidebarSignalCard">
+        <div class="signal-header">
+          <span class="signal-dot" id="signalDot"></span>
+          <span class="signal-mode" id="signalModeLabel">EN ESPERA</span>
+        </div>
+        <div class="signal-detail" id="signalDetailText">Sin flujo activo</div>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-btn active" data-view="library">Biblioteca Musical</button>
+        <button class="nav-btn" data-view="albums">Álbumes y Artistas</button>
+        <button class="nav-btn" data-view="eq">Ecualizador y DSP</button>
+        <button class="nav-btn" data-view="playlists">Cola y Listas</button>
+        <button class="nav-btn" data-view="lyrics">Letras Sincronizadas</button>
+        <button class="nav-btn" data-view="output">Salida de Audio (HAL)</button>
+      </nav>
+
+      <div class="sidebar-stats" id="libraryQuickStats">
+        <div><strong id="statTracks">0</strong> pistas</div>
+        <div><strong id="statHiRes">0</strong> Hi-Res / DSD</div>
+      </div>
+    </aside>
+
+    <!-- Área principal asíncrona -->
+    <main class="main-area">
+      <!-- VISTA 1: BIBLIOTECA -->
+      <section class="view-panel active" id="view-library">
+        <header class="panel-header">
+          <div>
+            <h1>Biblioteca Local</h1>
+            <p class="muted">Indexación recursiva asíncrona · FLAC, ALAC, MP3, WAV y DSD (.dsf/.dff)</p>
+          </div>
+          <form class="scan-bar" id="scanForm">
+            <input type="text" id="scanDirInput" placeholder="Ruta de carpeta local (ej. /home/usuario/Música)" required />
+            <button type="submit" class="btn primary" id="scanSubmitBtn">Escanear Carpeta</button>
+          </form>
+        </header>
+
+        <div class="scan-progress hidden" id="scanProgressBar">
+          <span id="scanProgressText">Escaneando...</span>
+        </div>
+
+        <div class="toolbar">
+          <input type="search" id="searchInput" class="search-box" placeholder="Buscar por título, artista, álbum, compositor o formato..." />
+          <div class="filter-pills" id="codecFilterPills">
+            <button class="pill active" data-filter="all">Todos</button>
+            <button class="pill" data-filter="hires">Hi-Res</button>
+            <button class="pill" data-filter="FLAC">FLAC</button>
+            <button class="pill" data-filter="ALAC">ALAC</button>
+            <button class="pill" data-filter="WAV">WAV</button>
+            <button class="pill" data-filter="MP3">MP3</button>
+            <button class="pill" data-filter="DSD">DSD</button>
+            <button class="pill" data-filter="lyrics">Con Letras</button>
+          </div>
+          <button class="btn subtle" id="playAllFilteredBtn">Reproducir Vista</button>
+        </div>
+
+        <div class="table-wrap">
+          <table class="tracks-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Título</th>
+                <th>Artista</th>
+                <th>Álbum</th>
+                <th>Compositor</th>
+                <th>Formato / Tasa</th>
+                <th>Duración</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="libraryTableBody"></tbody>
+          </table>
+          <div class="empty-hint" id="libraryEmptyHint">
+            Introduce la ruta de una carpeta con música local y pulsa <strong>Escanear Carpeta</strong>.
+          </div>
+        </div>
+      </section>
+
+      <!-- VISTA 2: ÁLBUMES Y ARTISTAS -->
+      <section class="view-panel" id="view-albums">
+        <header class="panel-header">
+          <div>
+            <h1>Álbumes Indexados</h1>
+            <p class="muted">Agrupación automática por metadatos embebidos y carátulas</p>
+          </div>
+        </header>
+        <div class="albums-grid" id="albumsGrid"></div>
+      </section>
+
+      <!-- VISTA 3: ECUALIZADOR Y PIPELINE DSP -->
+      <section class="view-panel" id="view-eq">
+        <header class="panel-header">
+          <div>
+            <h1>Ecualizador Paramétrico Fijo y Pipeline DSP</h1>
+            <p class="muted">Cascada de filtros Biquad RBJ en punto flotante de 64 bits con Pre-amp y suavizado exponencial</p>
+          </div>
+          <div class="eq-top-controls">
+            <label class="switch-label">
+              <input type="checkbox" id="eqEnableToggle" />
+              <span>Ecualizador Activo</span>
+            </label>
+            <select id="eqBandModeSelect" class="select-input">
+              <option value="5">5 Bandas (60 Hz – 14 kHz)</option>
+              <option value="10">10 Bandas ISO (31 Hz – 16 kHz)</option>
+            </select>
+          </div>
+        </header>
+
+        <div class="eq-toolbar-card">
+          <div class="preset-group">
+            <label for="presetSelect">Perfil (Preset JSON):</label>
+            <select id="presetSelect" class="select-input"></select>
+            <button class="btn subtle" id="savePresetBtn">Guardar Preset</button>
+            <button class="btn subtle" id="exportPresetBtn">Exportar JSON</button>
+            <button class="btn subtle" id="importPresetBtn">Importar JSON</button>
+            <button class="btn danger" id="deletePresetBtn">Eliminar</button>
+            <button class="btn subtle" id="resetFlatBtn">Plano (0 dB)</button>
+          </div>
+          <div class="smoothing-group">
+            <label class="switch-label" title="Interpolación exponencial de primer orden (15 ms) para evitar clics o ruido de cremallera al mover faders">
+              <input type="checkbox" id="smoothingToggle" checked />
+              <span>Suavizado de Parámetros (Anti-Click)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="eq-stage">
+          <!-- Faders verticales: Pre-amp + Bandas -->
+          <div class="faders-rack">
+            <div class="fader-col preamp-col">
+              <div class="fader-val" id="preampValLabel">0.0 dB</div>
+              <div class="vslider-wrap">
+                <input type="range" id="preampSlider" class="vslider" min="-15" max="15" step="0.5" value="0" />
+              </div>
+              <div class="fader-freq">Pre-amp</div>
+            </div>
+            <div class="faders-divider"></div>
+            <div class="bands-container" id="eqBandsContainer"></div>
+          </div>
+
+          <!-- Curva de respuesta en frecuencia en vivo + Hook DSP -->
+          <div class="eq-side-cards">
+            <div class="card">
+              <h3>Respuesta de Magnitud Biquad (dB)</h3>
+              <canvas id="eqCurveCanvas" width="420" height="175"></canvas>
+            </div>
+            <div class="card">
+              <div class="card-row-between">
+                <h3>Hook de Pipeline DSP (Escena Estéreo M/S)</h3>
+                <label class="switch-label">
+                  <input type="checkbox" id="dspHookToggle" />
+                  <span>Habilitar Hook</span>
+                </label>
+              </div>
+              <p class="muted small">
+                Punto de inserción nativo (<code>om_dsp_hook_fn</code>) ejecutado antes de la cascada Biquad. Cuando el Ecualizador y los Hooks están desactivados, el motor activa automáticamente el <strong>Bypass Bit-Perfect</strong>.
+              </p>
+              <div class="hook-slider-row">
+                <span>Anchura Estéreo: <strong id="stereoWidthVal">100%</strong></span>
+                <input type="range" id="stereoWidthSlider" min="0" max="2" step="0.05" value="1" />
+              </div>
+              <div class="hook-telemetry">
+                Bloques procesados por Hook: <strong id="hookBlocksCount">0</strong> · Muestras limitadas: <strong id="clippedSamplesCount">0</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VISTA 4: COLA ACTIVA, LISTAS ESTÁNDAR E INTELIGENTES -->
+      <section class="view-panel" id="view-playlists">
+        <div class="playlists-grid">
+          <!-- Cola activa Gapless -->
+          <div class="card">
+            <div class="card-row-between">
+              <h2>Cola de Reproducción Activa (Gapless)</h2>
+              <button class="btn subtle small" id="clearQueueBtn">Vaciar Cola</button>
+            </div>
+            <p class="muted small">La siguiente pista se pre-abre en el buffer circular en RAM para transición sin silencios.</p>
+            <ul class="item-list" id="activeQueueList"></ul>
+          </div>
+
+          <!-- Listas Estándar M3U / PLS / XSPF -->
+          <div class="card">
+            <div class="card-row-between">
+              <h2>Listas Estándar (M3U · PLS · XSPF)</h2>
+              <div class="btn-row">
+                <button class="btn primary small" id="newPlaylistBtn">+ Nueva Lista</button>
+                <button class="btn subtle small" id="importPlaylistModalBtn">Importar</button>
+              </div>
+            </div>
+            <ul class="item-list" id="standardPlaylistsList"></ul>
+          </div>
+
+          <!-- Listas Inteligentes por Reglas -->
+          <div class="card full-span">
+            <div class="card-row-between">
+              <div>
+                <h2>Listas Inteligentes Dinámicas</h2>
+                <p class="muted small">Evaluadas automáticamente en base a reglas sobre metadatos y propiedades acústicas</p>
+              </div>
+              <button class="btn primary small" id="newSmartPlaylistBtn">+ Crear Lista Inteligente</button>
+            </div>
+
+            <!-- Constructor de Lista Inteligente -->
+            <form class="smart-builder hidden" id="smartBuilderForm">
+              <div class="smart-builder-top">
+                <input type="text" id="smartNameInput" placeholder="Nombre de la lista inteligente" required />
+                <select id="smartMatchSelect" class="select-input">
+                  <option value="all">Cumplir TODAS las reglas</option>
+                  <option value="any">Cumplir CUALQUIERA de las reglas</option>
+                </select>
+                <select id="smartSortSelect" class="select-input">
+                  <option value="title">Ordenar por Título</option>
+                  <option value="sampleRate">Ordenar por Frecuencia (Hz)</option>
+                  <option value="year">Ordenar por Año</option>
+                  <option value="album">Ordenar por Álbum</option>
+                </select>
+              </div>
+              <div id="smartRulesContainer" class="smart-rules-list"></div>
+              <div class="btn-row">
+                <button type="button" class="btn subtle small" id="addSmartRuleBtn">+ Añadir Regla</button>
+                <button type="submit" class="btn primary small">Guardar Lista Inteligente</button>
+                <button type="button" class="btn subtle small" id="cancelSmartBuilderBtn">Cancelar</button>
+              </div>
+            </form>
+
+            <div class="smart-cards" id="smartPlaylistsContainer"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VISTA 5: LETRAS SINCRONIZADAS -->
+      <section class="view-panel" id="view-lyrics">
+        <header class="panel-header">
+          <div>
+            <h1>Letras Sincronizadas</h1>
+            <p class="muted" id="lyricsTrackSubtitle">Soporte embebido SYLT / USLT / Vorbis LYRICS / MP4 ©lyr y archivos .lrc</p>
+          </div>
+        </header>
+        <div class="lyrics-stage" id="lyricsContainer">
+          <div class="empty-hint">Reproduce una pista con letras sincronizadas para visualizar el desplazamiento en tiempo real.</div>
+        </div>
+      </section>
+
+      <!-- VISTA 6: SALIDA DE AUDIO Y CADENA BIT-PERFECT -->
+      <section class="view-panel" id="view-output">
+        <header class="panel-header">
+          <div>
+            <h1>Comunicación Directa con Hardware de Audio (HAL)</h1>
+            <p class="muted">ALSA directo en Linux (<code>snd_pcm_hw_params_set_rate_resample(..., 0)</code>) y WASAPI Exclusive/Shared en Windows</p>
+          </div>
+        </header>
+
+        <div class="output-grid">
+          <div class="card">
+            <h3>Dispositivo de Salida</h3>
+            <div class="form-field">
+              <label for="deviceSelect">Endpoint de Hardware:</label>
+              <select id="deviceSelect" class="select-input full-width"></select>
+            </div>
+            <div class="form-field">
+              <label class="switch-label">
+                <input type="checkbox" id="bitPerfectToggle" checked />
+                <span>Modo Bit-Perfect (Evitar remuestreo del SO y mantener frecuencia nativa)</span>
+              </label>
+            </div>
+            <div class="form-field">
+              <label class="switch-label">
+                <input type="checkbox" id="dopToggle" />
+                <span>Transporte DSD sobre PCM — DoP 24-bit (<code>0x05</code> / <code>0xFA</code>) para DACs compatibles</span>
+              </label>
+            </div>
+            <button class="btn primary" id="applyDeviceBtn">Aplicar Configuración de Salida</button>
+          </div>
+
+          <div class="card">
+            <h3>Ruta de Señal en Tiempo Real</h3>
+            <div class="chain-steps" id="signalChainSteps">
+              <div class="chain-step"><span>1. Fuente</span><strong id="chainSource">—</strong></div>
+              <div class="chain-step"><span>2. Buffer Gapless</span><strong id="chainRing">64 bloques RAM · 0 cortes</strong></div>
+              <div class="chain-step"><span>3. Etapa DSP</span><strong id="chainDsp">Bypass Bit-Perfect</strong></div>
+              <div class="chain-step"><span>4. Salida HAL</span><strong id="chainHal">Inactivo</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Barra inferior de transporte y vúmetros -->
+    <footer class="player-bar">
+      <div class="now-playing">
+        <div class="cover-box" id="playerCoverBox">
+          <div class="cover-placeholder">OM</div>
+        </div>
+        <div class="np-meta">
+          <div class="np-title" id="npTitle">Sin reproducción activa</div>
+          <div class="np-artist" id="npArtist">Selecciona una pista de tu biblioteca</div>
+          <div class="np-format" id="npFormatBadge">—</div>
+        </div>
+      </div>
+
+      <div class="transport-center">
+        <div class="transport-buttons">
+          <button class="icon-btn" id="shuffleBtn" title="Orden aleatorio">Aleat.</button>
+          <button class="icon-btn" id="prevBtn" title="Anterior">⏮</button>
+          <button class="play-btn" id="playPauseBtn" title="Reproducir / Pausar">▶</button>
+          <button class="icon-btn" id="stopBtn" title="Detener">⏹</button>
+          <button class="icon-btn" id="nextBtn" title="Siguiente">⏭</button>
+          <button class="icon-btn" id="repeatBtn" title="Modo de repetición">Rep: Off</button>
+        </div>
+        <div class="seek-row">
+          <span class="time-lbl" id="posTimeLabel">0:00</span>
+          <input type="range" id="seekSlider" min="0" max="1000" value="0" />
+          <span class="time-lbl" id="durTimeLabel">0:00</span>
+        </div>
+      </div>
+
+      <div class="right-meters">
+        <div class="vu-box" title="Medidor de nivel estéreo Pico/RMS en tiempo real">
+          <div class="vu-row"><span>L</span><div class="vu-track"><div class="vu-fill" id="vuBarL"></div></div></div>
+          <div class="vu-row"><span>R</span><div class="vu-track"><div class="vu-fill" id="vuBarR"></div></div></div>
+        </div>
+        <div class="vol-box">
+          <span title="100% mantiene ganancia unitaria Bit-Perfect">Vol</span>
+          <input type="range" id="volumeSlider" min="0" max="1" step="0.01" value="1" />
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Modal: Editor de Metadatos Embebidos (ID3v2 / Vorbis / MP4) -->
+  <div class="modal-backdrop hidden" id="tagModalBackdrop">
+    <div class="modal-card">
+      <div class="card-row-between">
+        <h2>Editor de Metadatos Embebidos</h2>
+        <span class="badge" id="tagModalFormatBadge">ID3v2 / Vorbis / MP4</span>
+      </div>
+      <form id="tagEditForm">
+        <input type="hidden" id="tagTrackId" />
+        <div class="modal-grid">
+          <label>Título<input type="text" id="tagTitle" required /></label>
+          <label>Artista<input type="text" id="tagArtist" /></label>
+          <label>Álbum<input type="text" id="tagAlbum" /></label>
+          <label>Compositor<input type="text" id="tagComposer" /></label>
+          <label>Año<input type="text" id="tagYear" /></label>
+          <label>Género<input type="text" id="tagGenre" /></label>
+          <label>N.º de Pista<input type="text" id="tagTrackNum" /></label>
+          <label>Carátula Embebida (JPEG/PNG)<input type="file" id="tagCoverFile" accept="image/jpeg,image/png" /></label>
+        </div>
+        <label class="full-block">
+          Letras / Letras Sincronizadas (.lrc: <code>[mm:ss.xx] verso</code>)
+          <textarea id="tagLyrics" rows="5" placeholder="[00:01.00] Primera línea sincronizada..."></textarea>
+        </label>
+        <div class="btn-row end">
+          <button type="button" class="btn subtle" id="closeTagModalBtn">Cancelar</button>
+          <button type="submit" class="btn primary">Escribir Metadatos en Archivo</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Importar Lista o Preset -->
+  <div class="modal-backdrop hidden" id="importPlaylistBackdrop">
+    <div class="modal-card">
+      <h2>Importar Lista de Reproducción (M3U / PLS / XSPF)</h2>
+      <form id="importPlaylistForm">
+        <label class="full-block">
+          Ruta local del archivo (.m3u, .m3u8, .pls, .xspf) — opcional si pegas el contenido abajo:
+          <input type="text" id="importPlaylistPath" placeholder="/ruta/a/lista.m3u8" />
+        </label>
+        <label class="full-block">
+          O pega el contenido M3U / PLS / XSPF directamente:
+          <textarea id="importPlaylistContent" rows="6" placeholder="#EXTM3U&#10;/ruta/pista.flac"></textarea>
+        </label>
+        <div class="btn-row end">
+          <button type="button" class="btn subtle" id="closeImportPlaylistBtn">Cancelar</button>
+          <button type="submit" class="btn primary">Importar Lista</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="appToast"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
