@@ -502,6 +502,36 @@ export class PlaylistManager extends EventEmitter {
     return this.getQueueState();
   }
 
+  async reorderQueue(fromIndex, toIndex) {
+    const from = Number(fromIndex);
+    const to = Number(toIndex);
+    if (
+      isNaN(from) ||
+      isNaN(to) ||
+      from < 0 ||
+      from >= this.queue.length ||
+      to < 0 ||
+      to >= this.queue.length ||
+      from === to
+    ) {
+      return this.getQueueState();
+    }
+    const [item] = this.queue.splice(from, 1);
+    this.queue.splice(to, 0, item);
+
+    if (this.currentIndex === from) {
+      this.currentIndex = to;
+    } else if (from < this.currentIndex && to >= this.currentIndex) {
+      this.currentIndex--;
+    } else if (from > this.currentIndex && to <= this.currentIndex) {
+      this.currentIndex++;
+    }
+
+    await this._armGaplessNext();
+    this.emit('queue_updated', this.getQueueState());
+    return this.getQueueState();
+  }
+
   async next() {
     if (this.queue.length === 0) return this.getQueueState();
     const nextIdx =

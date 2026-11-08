@@ -9,7 +9,8 @@ export class Store {
       currentView: 'albums', // 'albums' | 'tracks' | 'artists' | 'genres' | 'composers' | 'folders'
       breadcrumbs: ['Biblioteca', 'Álbumes'],
       sidebarCollapsed: false,
-      activeDrawer: null, // null | 'queue' | 'dsp' | 'lyrics'
+      activeDrawer: null, // null | 'queue' | 'dsp'
+      immersiveOpen: false, // Modo pantalla completa / sala de escucha
       showSignalPopover: false,
 
       // Reproducción activa
@@ -27,6 +28,20 @@ export class Store {
         isDsdNative: false,
         isDop: false,
       },
+
+      // Cola de Reproducción
+      queueState: {
+        queue: [],
+        currentIndex: -1,
+        currentTrack: null,
+        repeatMode: 'off',
+        shuffle: false,
+      },
+
+      // Estado DSP y Ecualizador
+      eqState: null,
+      dspState: null,
+      presets: [],
 
       // Biblioteca
       summary: {

@@ -329,7 +329,7 @@ export async function createOurMusicApp({
 
       if (method === 'POST' && pathname === '/api/player/seek') {
         const body = await readJsonBody(req);
-        await engine.seek(body.seconds ?? 0);
+        await engine.seek(body.seconds ?? body.positionSec ?? 0);
         return sendJson(res, 200, { ok: true, status: await engine.getStatus() });
       }
 
@@ -371,6 +371,12 @@ export async function createOurMusicApp({
 
       if (method === 'DELETE' && pathname === '/api/queue') {
         const qState = await playlists.clearQueue();
+        return sendJson(res, 200, { ok: true, queueState: qState });
+      }
+
+      if (method === 'POST' && pathname === '/api/queue/reorder') {
+        const body = await readJsonBody(req);
+        const qState = await playlists.reorderQueue(body.fromIndex, body.toIndex);
         return sendJson(res, 200, { ok: true, queueState: qState });
       }
 

@@ -1541,6 +1541,14 @@ html, body {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
 }
 
+.om-QueueItem.drag-over-top {
+  border-top: 2px solid var(--accent);
+}
+
+.om-QueueItem.drag-over-bottom {
+  border-bottom: 2px solid var(--accent);
+}
+
 .om-QueueItem__grip {
   color: var(--text-4);
   cursor: grab;

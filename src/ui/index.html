@@ -11,14 +11,20 @@
       <!-- 1. Barra Lateral de Navegación -->
       <div id="sidebar-container"></div>
 
-      <!-- 2. Área Principal de Contenido (Topbar + Vistas) -->
+      <!-- 2. Área Principal de Contenido (Topbar + Split Vistas / Drawers) -->
       <main class="om-Main" id="main-container">
         <div id="topbar-container"></div>
-        <div id="main-content-slot" style="flex:1;display:flex;flex-direction:column;overflow:hidden"></div>
+        <div class="om-MainSplit" id="main-split-area" style="flex:1;display:flex;overflow:hidden;position:relative">
+          <div id="main-content-slot" style="flex:1;display:flex;flex-direction:column;overflow:hidden"></div>
+          <div id="drawer-slot" style="display:none"></div>
+        </div>
       </main>
 
       <!-- 3. Barra de Reproducción Persistente (Now Playing Bar) -->
       <div id="nowplaying-container" style="grid-area:npbar"></div>
+
+      <!-- 4. Contenedor Flotante para Modo Inmersivo / Sala de Escucha -->
+      <div id="immersive-slot" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:100"></div>
     </div>
 
     <!-- Script Principal con Módulos ES -->

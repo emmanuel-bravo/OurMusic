@@ -165,14 +165,26 @@ export class NowPlayingBar {
 
     // Drawer Toggles
     const setupDrawerToggle = (btnId, drawerName) => {
-      this.container.querySelector(`#${btnId}`).addEventListener('click', () => {
-        const cur = this.store.state.activeDrawer;
-        this.store.setState({ activeDrawer: cur === drawerName ? null : drawerName });
-      });
+      const btn = this.container.querySelector(`#${btnId}`);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          const cur = this.store.state.activeDrawer;
+          this.store.setState({ activeDrawer: cur === drawerName ? null : drawerName });
+        });
+      }
     };
     setupDrawerToggle('toggle-queue', 'queue');
     setupDrawerToggle('toggle-dsp', 'dsp');
-    setupDrawerToggle('toggle-lyrics', 'lyrics');
+
+    const toggleImmersive = () => {
+      this.store.setState({ immersiveOpen: !this.store.state.immersiveOpen });
+    };
+
+    const lyricsBtn = this.container.querySelector('#toggle-lyrics');
+    if (lyricsBtn) lyricsBtn.addEventListener('click', toggleImmersive);
+
+    const fullBtn = this.container.querySelector('#toggle-fullscreen');
+    if (fullBtn) fullBtn.addEventListener('click', toggleImmersive);
   }
 
   updateSeekVisuals(pct, sec) {
@@ -289,7 +301,17 @@ export class NowPlayingBar {
     };
     syncActiveToggle('toggle-queue', 'queue');
     syncActiveToggle('toggle-dsp', 'dsp');
-    syncActiveToggle('toggle-lyrics', 'lyrics');
+
+    const lyBtn = this.container.querySelector('#toggle-lyrics');
+    if (lyBtn) {
+      lyBtn.style.background = state.immersiveOpen ? 'var(--accent-soft)' : '';
+      lyBtn.style.color = state.immersiveOpen ? 'var(--accent)' : '';
+    }
+    const fsBtn = this.container.querySelector('#toggle-fullscreen');
+    if (fsBtn) {
+      fsBtn.style.background = state.immersiveOpen ? 'var(--accent-soft)' : '';
+      fsBtn.style.color = state.immersiveOpen ? 'var(--accent)' : '';
+    }
   }
 
   renderSignalPopover() {

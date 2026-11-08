@@ -115,6 +115,84 @@ export class ApiClient {
     return this.post('/api/queue/enqueue', { track, tracks, playNext });
   }
 
+  static removeFromQueue(index) {
+    return this.delete(`/api/queue/${index}`);
+  }
+
+  static clearQueue() {
+    return this.delete('/api/queue');
+  }
+
+  static reorderQueue(fromIndex, toIndex) {
+    return this.post('/api/queue/reorder', { fromIndex, toIndex });
+  }
+
+  static playQueueIndex(index) {
+    return this.post('/api/player/play', { queueIndex: index });
+  }
+
+  static playTracks(trackIds, startIndex = 0) {
+    return this.post('/api/player/play', { trackIds, startIndex });
+  }
+
+  // --- Track Details & Lyrics ---
+  static getTrackDetail(trackId) {
+    return this.get(`/api/tracks/${encodeURIComponent(trackId)}`);
+  }
+
+  // --- Equalizer & DSP ---
+  static getEq() {
+    return this.get('/api/eq');
+  }
+
+  static setEq(data) {
+    return this.post('/api/eq', data);
+  }
+
+  static setEqBand(band, gainDb) {
+    return this.post('/api/eq/band', { band, gainDb });
+  }
+
+  static setEqPreamp(preampDb) {
+    return this.post('/api/eq/preamp', { preampDb });
+  }
+
+  static setEqSmoothing(enabled) {
+    return this.post('/api/eq/smoothing', { enabled });
+  }
+
+  static getPresets(numBands = 10) {
+    return this.get(`/api/eq/presets?numBands=${numBands}`);
+  }
+
+  static applyPreset(presetId, numBands = 10) {
+    return this.post('/api/eq/presets/apply', { id: presetId, numBands });
+  }
+
+  static getDsp() {
+    return this.get('/api/dsp');
+  }
+
+  static setDspPeq(data) {
+    return this.post('/api/dsp/peq', data);
+  }
+
+  static setDspCrossfeed(data) {
+    return this.post('/api/dsp/crossfeed', data);
+  }
+
+  static setDspConvolver(data) {
+    return this.post('/api/dsp/convolver', data);
+  }
+
+  static setDspReplayGain(data) {
+    return this.post('/api/dsp/replaygain', data);
+  }
+
+  static setDspResampler(data) {
+    return this.post('/api/dsp/resampler', data);
+  }
+
   // --- Real-time SSE Stream ---
   static subscribeEvents(onEvent, onError) {
     const es = new EventSource('/api/events');
@@ -123,6 +201,7 @@ export class ApiClient {
       'track_started',
       'playback_ended',
       'queue_updated',
+      'eq_updated',
       'scan_started',
       'scan_progress',
       'scan_completed',
