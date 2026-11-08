@@ -3,6 +3,7 @@
  */
 import { icon } from './icons.js';
 import { ApiClient } from './api.js';
+import { ShortcutsModal } from './shortcutsModal.js';
 
 export class Sidebar {
   constructor({ container, store }) {
@@ -11,9 +12,17 @@ export class Sidebar {
 
     this.render();
     this.bindEvents();
+    this.update(this.store.state);
 
     this.store.subscribe((state, keys) => {
-      if (keys.includes('currentView') || keys.includes('summary') || keys.includes('sidebarCollapsed')) {
+      if (
+        keys.includes('currentView') ||
+        keys.includes('summary') ||
+        keys.includes('sidebarCollapsed') ||
+        keys.includes('smartPlaylists') ||
+        keys.includes('playlists') ||
+        keys.includes('eqState')
+      ) {
         this.update(state);
       }
     });
@@ -115,6 +124,10 @@ export class Sidebar {
       const cur = this.store.state.activeDrawer;
       this.store.setState({ activeDrawer: cur === 'dsp' ? null : 'dsp' });
     });
+
+    this.container.querySelector('[data-action="open-settings"]')?.addEventListener('click', () => {
+      new ShortcutsModal({});
+    });
   }
 
   update(state) {
@@ -135,6 +148,67 @@ export class Sidebar {
       setCount('tracks', summary.totalTracks || 0);
       setCount('artists', summary.totalArtists || 0);
       setCount('folders', summary.folders?.length || 0);
+    }
+
+    // Actualizar insignia de DSP
+    const dspBadge = this.container.querySelector('#dsp-badge');
+    if (dspBadge && state.eqState) {
+      dspBadge.textContent = state.eqState.enabled ? '64-bit ON' : 'Bypass';
+      dspBadge.style.color = state.eqState.enabled ? 'var(--accent)' : '';
+    }
+
+    // Renderizar Listas Inteligentes
+    const smartSlot = this.container.querySelector('#smart-playlists-list');
+    if (smartSlot && Array.isArray(state.smartPlaylists)) {
+      smartSlot.innerHTML = state.smartPlaylists
+        .map(
+          (sp) => `
+          <div class="om-NavItem" data-smart-id="${sp.id}" title="Reproducir lista inteligente: ${sp.name}">
+            <div class="om-NavItem__left">
+              ${icon('bolt', { size: 16 })}
+              <span class="om-NavItem__text">${sp.name}</span>
+            </div>
+            <span class="om-NavItem__count tnum">${sp.trackCount ?? sp.tracks?.length ?? 0}</span>
+          </div>`,
+        )
+        .join('');
+      smartSlot.querySelectorAll('[data-smart-id]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const id = el.getAttribute('data-smart-id');
+          const sp = state.smartPlaylists.find((x) => x.id === id);
+          if (sp && Array.isArray(sp.tracks) && sp.tracks.length > 0) {
+            ApiClient.play(sp.tracks, 0).catch(console.error);
+          } else {
+            this.store.setState({ currentView: 'tracks' });
+          }
+        });
+      });
+    }
+
+    // Renderizar Mis Listas
+    const plSlot = this.container.querySelector('#user-playlists-list');
+    if (plSlot && Array.isArray(state.playlists)) {
+      plSlot.innerHTML = state.playlists
+        .map(
+          (pl) => `
+          <div class="om-NavItem" data-pl-id="${pl.id}">
+            <div class="om-NavItem__left">
+              ${icon('list', { size: 16 })}
+              <span class="om-NavItem__text">${pl.name}</span>
+            </div>
+            <span class="om-NavItem__count tnum">${pl.trackCount ?? pl.tracks?.length ?? 0}</span>
+          </div>`,
+        )
+        .join('');
+      plSlot.querySelectorAll('[data-pl-id]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const id = el.getAttribute('data-pl-id');
+          const pl = state.playlists.find((x) => x.id === id);
+          if (pl && Array.isArray(pl.tracks) && pl.tracks.length > 0) {
+            ApiClient.play(pl.tracks, 0).catch(console.error);
+          }
+        });
+      });
     }
   }
 }

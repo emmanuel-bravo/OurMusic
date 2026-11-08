@@ -27,9 +27,70 @@ function launchWindowsAppWindow(url) {
   fallback.unref();
 }
 
+function findLinuxBrowser() {
+  const candidates = [
+    '/usr/bin/opera',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/firefox',
+    '/usr/bin/brave-browser',
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function launchBrowser(url) {
+  console.log(`\n=============================================================`);
+  console.log(`  OurMusic — Servidor Activo y Listo`);
+  console.log(`  👉  Abre o haz clic en tu navegador: ${url}`);
+  console.log(`=============================================================\n`);
+
+  if (process.platform === 'win32') {
+    const c = spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' });
+    c.on('error', () => {});
+    c.unref();
+    return;
+  }
+
+  if (process.platform === 'darwin') {
+    const c = spawn('open', [url], { detached: true, stdio: 'ignore' });
+    c.on('error', () => {});
+    c.unref();
+    return;
+  }
+
+  // Linux: 1. Intentar el navegador instalado directamente
+  const browserBin = findLinuxBrowser();
+  if (browserBin) {
+    try {
+      const b = spawn(browserBin, [url], { detached: true, stdio: 'ignore' });
+      b.on('error', () => {});
+      b.unref();
+    } catch {
+      // continuar
+    }
+  }
+
+  // 2. Intentar también xdg-open / gio
+  for (const cmd of ['gio', 'xdg-open']) {
+    try {
+      const args = cmd === 'gio' ? ['open', url] : [url];
+      const p = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+      p.on('error', () => {});
+      p.unref();
+    } catch {
+      // continuar
+    }
+  }
+}
+
 async function main() {
   const args = new Set(process.argv.slice(2));
-  const webOnly = args.has('--web-only');
+  const webOnly = args.has('--web-only') || args.has('--web') || args.has('--browser');
   const winApp = args.has('--windows-app');
   const preferredPort = parseInt(process.env.OURMUSIC_PORT || '4380', 10);
 
@@ -50,7 +111,11 @@ async function main() {
   const gracefulExit = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await app.close();
+    try {
+      await app.close();
+    } catch {
+      // Ignorar errores al salir
+    }
     process.exit(0);
   };
 
@@ -60,14 +125,43 @@ async function main() {
   if (!webOnly && process.platform === 'linux') {
     const guiBin = path.join(ROOT_DIR, 'bin', 'ourmusic-gui');
     const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+    let guiLaunched = false;
+
     if (hasDisplay && fs.existsSync(guiBin)) {
-      const gui = spawn(guiBin, [app.baseUrl], { stdio: 'inherit' });
-      gui.on('close', gracefulExit);
-    } else {
-      console.log(`  Abre ${app.baseUrl} en tu navegador para usar la interfaz.`);
+      const startTime = Date.now();
+      guiLaunched = true;
+      const env = {
+        ...process.env,
+        GDK_BACKEND: process.env.GDK_BACKEND || 'wayland,x11',
+        WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1',
+        WEBKIT_DISABLE_COMPOSITING_MODE: '1',
+        WEBKIT_DISABLE_DMABUF_RENDERER: '1',
+      };
+      const gui = spawn(guiBin, [app.baseUrl], { stdio: 'inherit', env });
+
+      gui.on('error', (err) => {
+        console.warn('[OurMusic] Error al lanzar ventana nativa GTK:', err.message);
+        launchBrowser(app.baseUrl);
+      });
+
+      gui.on('close', (code) => {
+        const elapsed = Date.now() - startTime;
+        if (code !== 0 || elapsed < 2000) {
+          console.warn(`[OurMusic] La ventana nativa GTK no pudo inicializarse (código ${code}).`);
+          launchBrowser(app.baseUrl);
+        } else {
+          gracefulExit();
+        }
+      });
+    }
+
+    if (!guiLaunched) {
+      launchBrowser(app.baseUrl);
     }
   } else if (!webOnly && (process.platform === 'win32' || winApp)) {
     launchWindowsAppWindow(app.baseUrl);
+  } else {
+    launchBrowser(app.baseUrl);
   }
 }
 

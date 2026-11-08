@@ -23,6 +23,7 @@ export class NowPlayingBar {
 
     this.render();
     this.bindEvents();
+    this.update(this.store.state);
 
     this.store.subscribe((state, keys) => {
       if (keys.includes('playback') || keys.includes('showSignalPopover') || keys.includes('activeDrawer')) {

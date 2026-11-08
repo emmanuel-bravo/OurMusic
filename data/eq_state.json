@@ -1,5 +1,5 @@
 {
-  "enabled": false,
+  "enabled": true,
   "peqMode": false,
   "numBands": 10,
   "preampDb": 0,
@@ -17,11 +17,11 @@
   ],
   "peqBands": [],
   "smoothingEnabled": false,
-  "limiterEnabled": true,
+  "limiterEnabled": false,
   "customHookEnabled": true,
   "stereoWidth": 1,
   "crossfeed": {
-    "enabled": false,
+    "enabled": true,
     "cutoffHz": 700,
     "feedDb": -6,
     "itdUs": 260

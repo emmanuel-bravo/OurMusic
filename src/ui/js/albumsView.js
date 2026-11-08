@@ -13,6 +13,7 @@ export class AlbumsView {
 
     this.render();
     this.bindEvents();
+    this.update(this.store.state);
 
     this.store.subscribe((state, keys) => {
       if (keys.includes('summary') || keys.includes('activeFilter')) {
@@ -55,8 +56,16 @@ export class AlbumsView {
   }
 
   update(state) {
-    const { summary, activeFilter } = state;
-    const albums = summary.albums || [];
+    const { summary, activeFilter, tracks = [] } = state;
+    let albums = summary.albums || [];
+
+    if (activeFilter === 'hires') {
+      const hiResAlbums = new Set(tracks.filter((t) => t.isHiRes || t.codec === 'DSD').map((t) => t.album));
+      if (hiResAlbums.size > 0) albums = albums.filter((a) => hiResAlbums.has(a.album));
+    } else if (activeFilter === 'lossless') {
+      const losslessAlbums = new Set(tracks.filter((t) => t.isLossless).map((t) => t.album));
+      if (losslessAlbums.size > 0) albums = albums.filter((a) => losslessAlbums.has(a.album));
+    }
 
     const subEl = this.container.querySelector('#albums-count-sub');
     if (subEl) {
@@ -68,10 +77,23 @@ export class AlbumsView {
 
     if (albums.length === 0) {
       grid.innerHTML = `
-        <div style="grid-column: 1 / -1; padding: 48px; text-align: center; color: var(--text-3)">
-          No se encontraron álbumes en tu biblioteca.
+        <div style="grid-column: 1 / -1; padding: 64px 24px; text-align: center; background: var(--bg-1); border: 1px dashed var(--border-2); border-radius: var(--radius-lg); display: flex; flex-direction: column; align-items: center; gap: 14px">
+          <div style="width: 56px; height: 56px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: flex; align-items: center; justify-content: center">
+            ${icon('folder', { size: 26 })}
+          </div>
+          <div style="font-size: 16px; font-weight: 600; color: var(--text-1)">Tu biblioteca musical está vacía</div>
+          <div style="font-size: 13px; color: var(--text-2); max-width: 440px; line-height: 1.5">
+            Vincula tus carpetas locales con archivos FLAC, WAV, AIFF, DSF/DFF o MP3 para indexar portadas, metadatos y reproducir en modo Bit-Perfect.
+          </div>
+          <button class="om-Btn om-Btn--primary" id="btn-empty-go-folders" style="margin-top: 6px; cursor: pointer">
+            ${icon('plus', { size: 15 })}
+            <span>Vincular carpeta de música local</span>
+          </button>
         </div>
       `;
+      grid.querySelector('#btn-empty-go-folders')?.addEventListener('click', () => {
+        this.store.setState({ currentView: 'folders' });
+      });
       return;
     }
 
@@ -121,10 +143,7 @@ export class AlbumsView {
     try {
       const res = await ApiClient.getTracks({ album: albumName, sortBy: 'trackNumber', sortOrder: 'asc' });
       if (res.tracks && res.tracks.length > 0) {
-        await ApiClient.play(res.tracks[0]);
-        if (res.tracks.length > 1) {
-          await ApiClient.enqueue({ tracks: res.tracks.slice(1) });
-        }
+        await ApiClient.play(res.tracks, 0);
       }
     } catch (err) {
       console.error('Error reproduciendo álbum completo:', err);

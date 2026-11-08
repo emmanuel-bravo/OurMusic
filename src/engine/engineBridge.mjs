@@ -56,6 +56,13 @@ export class EngineBridge extends EventEmitter {
       });
       this.proc = proc;
 
+      proc.stdin.on('error', (err) => {
+        // Ignorar EPIPE si el proceso ya terminó al salir
+        if (err.code !== 'EPIPE' && err.code !== 'ECONNRESET') {
+          this.emit('error', err);
+        }
+      });
+
       proc.on('error', (err) => {
         if (!settled) {
           settled = true;
@@ -174,8 +181,8 @@ export class EngineBridge extends EventEmitter {
   }
 
   sendCommand(cmd, payload = {}, timeoutMs = 6000) {
-    if (!this.proc || !this.ready) {
-      return Promise.reject(new Error('El motor de audio no está iniciado'));
+    if (!this.proc || !this.ready || !this.proc.stdin || !this.proc.stdin.writable) {
+      return Promise.reject(new Error('El motor de audio no está disponible'));
     }
     const id = this.nextId++;
     const line = JSON.stringify({ id, cmd, ...payload }) + '\n';
@@ -185,7 +192,19 @@ export class EngineBridge extends EventEmitter {
         reject(new Error(`Tiempo agotado esperando respuesta a '${cmd}'`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.proc.stdin.write(line, 'utf8');
+      try {
+        this.proc.stdin.write(line, 'utf8', (err) => {
+          if (err) {
+            clearTimeout(timer);
+            this.pending.delete(id);
+            reject(err);
+          }
+        });
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(err);
+      }
     });
   }
 

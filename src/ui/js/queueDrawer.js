@@ -79,8 +79,8 @@ export class QueueDrawer {
               <div class="om-QueueItem is-current" id="queue-current-item">
                 <div class="om-MiniThumb" style="width:36px;height:36px;border-radius:4px;overflow:hidden;flex-shrink:0">
                   ${
-                    currentTrack.coverArtId
-                      ? `<img src="/api/covers/${currentTrack.coverArtId}" style="width:100%;height:100%;object-fit:cover" alt="" onerror="this.outerHTML='${coverSvg(currentTrack, 36).replace(/"/g, '&quot;')}'" />`
+                    currentTrack.coverId || currentTrack.coverArtId
+                      ? `<img src="/api/covers/${encodeURIComponent(currentTrack.coverId || currentTrack.coverArtId)}" style="width:100%;height:100%;object-fit:cover" alt="" />`
                       : coverSvg(currentTrack, 36)
                   }
                 </div>
@@ -120,8 +120,8 @@ export class QueueDrawer {
                       <span class="om-QueueItem__grip" title="Arrastrar para reordenar">${icon('grip', { size: 15 })}</span>
                       <div class="om-MiniThumb" style="width:30px;height:30px;border-radius:3px;overflow:hidden;flex-shrink:0">
                         ${
-                          item.coverArtId
-                            ? `<img src="/api/covers/${item.coverArtId}" style="width:100%;height:100%;object-fit:cover" alt="" onerror="this.outerHTML='${coverSvg(item, 30).replace(/"/g, '&quot;')}'" />`
+                          item.coverId || item.coverArtId
+                            ? `<img src="/api/covers/${encodeURIComponent(item.coverId || item.coverArtId)}" style="width:100%;height:100%;object-fit:cover" alt="" />`
                             : coverSvg(item, 30)
                         }
                       </div>

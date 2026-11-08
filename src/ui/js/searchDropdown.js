@@ -13,7 +13,12 @@ export class SearchDropdown {
     this.onClose = onClose;
     this.results = [];
     this.perfMs = 0;
+    this.isOpen = false;
+  }
 
+  open() {
+    if (this.isOpen) return;
+    this.isOpen = true;
     this.render();
   }
 
@@ -40,20 +45,21 @@ export class SearchDropdown {
     `;
 
     this.container.querySelector('#search-scrim')?.addEventListener('click', () => {
-      if (this.onClose) this.onClose();
+      this.close(true);
     });
 
     this.container.querySelector('#search-view-all')?.addEventListener('click', () => {
-      if (this.onClose) this.onClose();
+      this.close(true);
     });
   }
 
   async search(query) {
-    if (!query || query.length < 2) {
-      this.close();
+    if (!query || query.length < 1) {
+      this.close(false);
       return;
     }
 
+    this.open();
     const t0 = performance.now();
     try {
       const res = await ApiClient.getTracks({ search: query, limit: 12 });
@@ -137,12 +143,12 @@ export class SearchDropdown {
     // Eventos de reproducción
     body.querySelector('#top-play-btn')?.addEventListener('click', () => {
       ApiClient.play(topHit).catch(console.error);
-      this.close();
+      this.close(true);
     });
 
     body.querySelector('#top-queue-btn')?.addEventListener('click', () => {
       ApiClient.enqueue({ track: topHit }).catch(console.error);
-      this.close();
+      this.close(true);
     });
 
     body.querySelectorAll('[data-search-track-id]').forEach((row) => {
@@ -151,14 +157,16 @@ export class SearchDropdown {
         const trk = this.results.find((t) => t.id === id);
         if (trk) {
           ApiClient.play(trk).catch(console.error);
-          this.close();
+          this.close(true);
         }
       });
     });
   }
 
-  close() {
+  close(notify = false) {
+    if (!this.isOpen && !this.container.innerHTML) return;
+    this.isOpen = false;
     this.container.innerHTML = '';
-    if (this.onClose) this.onClose();
+    if (notify && this.onClose) this.onClose();
   }
 }

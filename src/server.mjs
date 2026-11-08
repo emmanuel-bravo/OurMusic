@@ -135,7 +135,10 @@ export async function createOurMusicApp({
   };
 
   engine.on('telemetry', (st) => broadcastSse('telemetry', st));
-  engine.on('track_started', (ev) => broadcastSse('track_started', ev));
+  engine.on('track_started', (ev) => {
+    const track = (ev?.path ? library.getTrackByPath(ev.path) : null) || playlists.getQueueState().currentTrack || null;
+    broadcastSse('track_started', { ...ev, track });
+  });
   engine.on('playback_ended', (ev) => broadcastSse('playback_ended', ev));
   playlists.on('queue_updated', (q) => broadcastSse('queue_updated', q));
   library.on('scan_started', (p) => broadcastSse('scan_started', p));
@@ -229,8 +232,23 @@ export async function createOurMusicApp({
 
       if (method === 'POST' && pathname === '/api/library/scan') {
         const body = await readJsonBody(req);
-        if (!body.directory) return sendJson(res, 400, { ok: false, error: 'Falta el campo directory' });
-        const report = await library.scanDirectory(body.directory);
+        const dirToScan = body.directory || body.path;
+        if (!dirToScan) return sendJson(res, 400, { ok: false, error: 'Falta el campo directory' });
+        const report = await library.scanDirectory(dirToScan);
+        return sendJson(res, 200, {
+          ok: true,
+          report,
+          summary: library.getSummary(),
+          tracks: library.queryTracks(),
+          smartPlaylists: playlists.listSmartPlaylists(),
+        });
+      }
+
+      if (method === 'POST' && pathname === '/api/library/folder') {
+        const body = await readJsonBody(req);
+        const dirToScan = body.directory || body.path;
+        if (!dirToScan) return sendJson(res, 400, { ok: false, error: 'Falta el campo directory o path' });
+        const report = await library.scanDirectory(dirToScan);
         return sendJson(res, 200, {
           ok: true,
           report,
@@ -242,7 +260,8 @@ export async function createOurMusicApp({
 
       if (method === 'DELETE' && pathname === '/api/library/folder') {
         const body = await readJsonBody(req);
-        if (body.directory) library.removeFolder(body.directory);
+        const dirToRemove = body.directory || body.path;
+        if (dirToRemove) library.removeFolder(dirToRemove);
         return sendJson(res, 200, {
           ok: true,
           summary: library.getSummary(),
@@ -301,17 +320,38 @@ export async function createOurMusicApp({
       if (method === 'POST' && pathname === '/api/player/play') {
         const body = await readJsonBody(req);
         let qState;
+        const singleTrackId = body.trackId || body.track?.id || (typeof body.track === 'string' ? body.track : null);
+        const singlePath = body.path || body.track?.filePath || null;
         if (Array.isArray(body.trackIds) && body.trackIds.length > 0) {
-          qState = await playlists.setQueueAndPlay(body.trackIds, body.startIndex ?? 0);
-        } else if (body.trackId) {
-          qState = await playlists.setQueueAndPlay([body.trackId], 0);
-        } else if (body.path) {
-          qState = await playlists.setQueueAndPlay([body.path], 0);
+          qState = await playlists.setQueueAndPlay(body.trackIds, body.startIndex ?? body.index ?? 0);
+        } else if (Array.isArray(body.tracks) && body.tracks.length > 0) {
+          qState = await playlists.setQueueAndPlay(body.tracks, body.startIndex ?? body.index ?? 0);
+        } else if (singleTrackId) {
+          qState = await playlists.setQueueAndPlay([singleTrackId], 0);
+        } else if (singlePath) {
+          qState = await playlists.setQueueAndPlay([singlePath], 0);
         } else if (typeof body.queueIndex === 'number') {
           qState = await playlists.playIndex(body.queueIndex);
+        } else if (typeof body.index === 'number') {
+          qState = await playlists.playIndex(body.index);
         } else {
-          await engine.pause(false);
-          qState = playlists.getQueueState();
+          // Si ya hay pista cargada, reanudar; si no hay pista activa pero hay cola o biblioteca, iniciar primera pista
+          const curStatus = await engine.getStatus();
+          if (curStatus?.state === 'paused') {
+            await engine.pause(false);
+            qState = playlists.getQueueState();
+          } else if (playlists.queue.length > 0) {
+            const targetIdx = playlists.currentIndex >= 0 ? playlists.currentIndex : 0;
+            qState = await playlists.playIndex(targetIdx);
+          } else {
+            const firstTracks = library.queryTracksPaginated({ limit: 50, offset: 0 }).tracks;
+            if (firstTracks.length > 0) {
+              qState = await playlists.setQueueAndPlay(firstTracks, 0);
+            } else {
+              await engine.pause(false);
+              qState = playlists.getQueueState();
+            }
+          }
         }
         return sendJson(res, 200, { ok: true, queueState: qState });
       }
@@ -345,21 +385,39 @@ export async function createOurMusicApp({
 
       if (method === 'POST' && pathname === '/api/player/volume') {
         const body = await readJsonBody(req);
-        await engine.setVolume(body.value ?? 1.0);
+        await engine.setVolume(body.value ?? body.volume ?? 1.0);
         return sendJson(res, 200, { ok: true, status: await engine.getStatus() });
       }
 
       if (method === 'POST' && pathname === '/api/player/modes') {
         const body = await readJsonBody(req);
-        const qState = await playlists.setModes(body);
+        const qState = await playlists.setModes({
+          repeatMode: body.repeatMode ?? body.repeat,
+          shuffle: body.shuffle,
+        });
         return sendJson(res, 200, { ok: true, queueState: qState });
+      }
+
+      if (method === 'GET' && pathname === '/api/queue') {
+        return sendJson(res, 200, { ok: true, queueState: playlists.getQueueState() });
       }
 
       if (method === 'POST' && pathname === '/api/queue/enqueue') {
         const body = await readJsonBody(req);
-        const qState = await playlists.enqueue(body.trackId || body.path, {
-          playNext: Boolean(body.playNext),
-        });
+        const items = Array.isArray(body.tracks)
+          ? body.tracks
+          : Array.isArray(body.trackIds)
+            ? body.trackIds
+            : [body.trackId || body.path || body.track].filter(Boolean);
+        let qState = playlists.getQueueState();
+        const playNext = Boolean(body.playNext);
+        const list = playNext ? [...items].reverse() : items;
+        for (const item of list) {
+          const idOrPath = typeof item === 'object' ? (item.id || item.filePath) : item;
+          if (idOrPath) {
+            qState = await playlists.enqueue(idOrPath, { playNext });
+          }
+        }
         return sendJson(res, 200, { ok: true, queueState: qState });
       }
 

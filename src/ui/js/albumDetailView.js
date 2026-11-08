@@ -13,11 +13,12 @@ function formatDuration(sec) {
 }
 
 export class AlbumDetailView {
-  constructor({ container, store, albumData, onBack }) {
+  constructor({ container, store, albumData, onBack, onContextMenu }) {
     this.container = container;
     this.store = store;
     this.albumData = albumData;
     this.onBack = onBack;
+    this.onContextMenu = onContextMenu;
     this.tracks = [];
 
     this.render();
@@ -66,7 +67,7 @@ export class AlbumDetailView {
         </div>
       </section>
 
-      <div class="om-Content" style="padding-top:12px">
+      <div class="om-Content" style="padding-top:12px;overflow-y:auto">
         <table class="om-TrackTable">
           <thead>
             <tr>
@@ -163,13 +164,22 @@ export class AlbumDetailView {
       })
       .join('');
 
-    // Doble clic o clic para reproducir
+    // Clic para reproducir o clic derecho para menú contextual
     tbody.querySelectorAll('tr[data-track-id]').forEach((row) => {
       row.addEventListener('click', () => {
         const trkId = row.getAttribute('data-track-id');
         const trk = this.tracks.find((t) => t.id === trkId);
         if (trk) {
           ApiClient.play(trk).catch(console.error);
+        }
+      });
+
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const trkId = row.getAttribute('data-track-id');
+        const trk = this.tracks.find((t) => t.id === trkId);
+        if (trk && this.onContextMenu) {
+          this.onContextMenu({ x: e.clientX, y: e.clientY, track: trk });
         }
       });
     });
@@ -190,10 +200,7 @@ export class AlbumDetailView {
   bindActionButtons() {
     this.container.querySelector('#hero-play-all-btn')?.addEventListener('click', async () => {
       if (this.tracks.length > 0) {
-        await ApiClient.play(this.tracks[0]);
-        if (this.tracks.length > 1) {
-          await ApiClient.enqueue({ tracks: this.tracks.slice(1) });
-        }
+        await ApiClient.play(this.tracks, 0);
       }
     });
 

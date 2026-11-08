@@ -140,8 +140,8 @@ export class ImmersiveLyricsView {
           <div class="om-Immersive__vinyl">
             <div class="om-Immersive__art" style="position:relative">
               ${
-                trk.coverArtId
-                  ? `<img src="/api/covers/${trk.coverArtId}" style="width:100%;height:100%;object-fit:cover" alt="${trk.album || ''}" onerror="this.outerHTML='${coverSvg(trk, 420).replace(/"/g, '&quot;')}'" />`
+                trk.coverId || trk.coverArtId
+                  ? `<img src="/api/covers/${encodeURIComponent(trk.coverId || trk.coverArtId)}" style="width:100%;height:100%;object-fit:cover" alt="${trk.album || ''}" />`
                   : coverSvg(trk, 420)
               }
             </div>
@@ -227,7 +227,9 @@ export class ImmersiveLyricsView {
 
   bindEvents() {
     // Salir del modo inmersivo
-    const exitBtn = this.container.querySelector('#imm-exit-btn');
+    const exitBtn =
+      this.container.querySelector('#immersive-exit-btn') ||
+      this.container.querySelector('#imm-exit-btn');
     if (exitBtn) {
       exitBtn.addEventListener('click', () => {
         if (this.onClose) this.onClose();

@@ -13,9 +13,10 @@ function formatDuration(sec) {
 }
 
 export class TracksTableView {
-  constructor({ container, store }) {
+  constructor({ container, store, onContextMenu }) {
     this.container = container;
     this.store = store;
+    this.onContextMenu = onContextMenu;
     this.tracks = [];
     this.total = 0;
     this.showColPicker = false;
@@ -86,6 +87,21 @@ export class TracksTableView {
     this.container.querySelector('#btn-toggle-cols')?.addEventListener('click', () => {
       this.showColPicker = !this.showColPicker;
       this.renderColPicker();
+    });
+
+    this.container.querySelectorAll('.om-FilterPills [data-filter]').forEach((pill) => {
+      pill.addEventListener('click', () => {
+        this.container.querySelectorAll('.om-FilterPills [data-filter]').forEach((p) => p.classList.remove('is-active'));
+        pill.classList.add('is-active');
+        const filter = pill.getAttribute('data-filter');
+        if (filter === 'hires') {
+          this.loadTracks({ hiResOnly: 'true' });
+        } else if (filter === 'lossless') {
+          this.loadTracks({ losslessOnly: 'true' });
+        } else {
+          this.loadTracks({});
+        }
+      });
     });
   }
 
@@ -163,6 +179,15 @@ export class TracksTableView {
         const trk = this.tracks.find((t) => t.id === id);
         if (trk) {
           ApiClient.play(trk).catch(console.error);
+        }
+      });
+
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const id = row.getAttribute('data-track-id');
+        const trk = this.tracks.find((t) => t.id === id);
+        if (trk && this.onContextMenu) {
+          this.onContextMenu({ x: e.clientX, y: e.clientY, track: trk });
         }
       });
     });

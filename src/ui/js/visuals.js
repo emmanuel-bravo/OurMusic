@@ -25,11 +25,28 @@ export function hashString(str) {
 
 let uid = 0;
 
+const DEFAULT_PALETTES = [
+  ['#1d2a44', '#e8a25c', '#5b7fb8', '#f3d8a7'],
+  ['#2a1b2e', '#d97b66', '#8c5383', '#f2c18d'],
+  ['#162925', '#52b788', '#2d6a4f', '#b7e4c7'],
+  ['#2b2118', '#e09f3e', '#9e2a2b', '#fff3b0'],
+  ['#1b263b', '#778da9', '#415a77', '#e0e1dd'],
+];
+const DEFAULT_STYLES = ['waves', 'orbs', 'rings', 'horizon', 'bauhaus', 'stripes'];
+
 /** Devuelve el SVG (string) de una carátula abstracta determinista. */
-export function coverSvg(album) {
+export function coverSvg(album = {}) {
+  const safeAlbum = album && typeof album === 'object' ? album : { title: String(album || 'OurMusic') };
+  const titleStr = String(safeAlbum.title || safeAlbum.album || safeAlbum.fileName || 'OurMusic');
+  const artistStr = String(safeAlbum.artist || '');
+  const seed = hashString(titleStr + artistStr);
   const id = `cv${uid++}`;
-  const rnd = mulberry32(hashString(album.title + album.artist));
-  const [bg, c1, c2, c3] = album.palette;
+  const rnd = mulberry32(seed);
+  const palette = Array.isArray(safeAlbum.palette) && safeAlbum.palette.length >= 4
+    ? safeAlbum.palette
+    : DEFAULT_PALETTES[seed % DEFAULT_PALETTES.length];
+  const [bg, c1, c2, c3] = palette;
+  const style = safeAlbum.style || DEFAULT_STYLES[seed % DEFAULT_STYLES.length];
   const parts = [];
   const defs = [
     `<linearGradient id="${id}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${bg}"/><stop offset="1" stop-color="${shade(bg, -0.35)}"/></linearGradient>`,
@@ -38,7 +55,7 @@ export function coverSvg(album) {
   ];
   parts.push(`<rect width="100" height="100" fill="url(#${id}g)"/>`);
 
-  switch (album.style) {
+  switch (style) {
     case 'orbs':
       for (let i = 0; i < 4; i++) {
         const c = [c1, c2, c3][i % 3];
@@ -99,7 +116,12 @@ export function coverSvg(album) {
 /* ---------------- Color ---------------- */
 
 export function hexToRgb(hex) {
-  const n = parseInt(hex.replace('#', ''), 16);
+  const str = String(hex || '#e3a86b');
+  if (!/^#?[0-9a-fA-F]{6}$/.test(str)) {
+    const h = (hashString(str) % 360) / 360;
+    return hslToRgb([h, 0.6, 0.55]).map((v) => Math.round(v));
+  }
+  const n = parseInt(str.replace('#', ''), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
@@ -206,4 +228,28 @@ export function mockPeaks(seedStr, count = 160) {
     out.push(Math.max(0.08, Math.min(1, env * (0.65 + rnd() * 0.5))));
   }
   return out;
+}
+
+/** Formatea segundos como mm:ss o hh:mm:ss */
+export function formatTime(sec) {
+  const n = Number(sec);
+  if (!n || isNaN(n) || n < 0) return '0:00';
+  const totalSec = Math.floor(n);
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (hrs > 0) {
+    return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+/** Formatea bytes en KB, MB o GB */
+export function formatBytes(bytes) {
+  const b = Number(bytes);
+  if (!b || isNaN(b) || b <= 0) return '0 B';
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }

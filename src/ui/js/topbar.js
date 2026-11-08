@@ -11,6 +11,7 @@ export class Topbar {
 
     this.render();
     this.bindEvents();
+    this.update(this.store.state);
 
     this.store.subscribe((state, keys) => {
       if (keys.includes('breadcrumbs') || keys.includes('currentView') || keys.includes('searchQuery')) {
@@ -69,6 +70,27 @@ export class Topbar {
         input.select();
       }
     });
+
+    // Alternar Cuadrícula (Álbumes) / Tabla (Pistas)
+    this.container.querySelectorAll('#view-mode-toggle [data-mode]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-mode');
+        this.store.setState({ currentView: mode === 'list' ? 'tracks' : 'albums' });
+      });
+    });
+
+    // Crumb raíz -> Álbumes
+    this.container.querySelector('#crumb-root')?.addEventListener('click', () => {
+      this.store.setState({ currentView: 'albums' });
+    });
+
+    // Botones Atrás / Adelante
+    this.container.querySelector('#hist-back')?.addEventListener('click', () => {
+      this.store.setState({ currentView: 'albums' });
+    });
+    this.container.querySelector('#hist-forward')?.addEventListener('click', () => {
+      this.store.setState({ currentView: 'tracks' });
+    });
   }
 
   update(state) {
@@ -84,5 +106,11 @@ export class Topbar {
       };
       crumbCurrent.textContent = titles[state.currentView] || 'Colección';
     }
+
+    this.container.querySelectorAll('#view-mode-toggle [data-mode]').forEach((btn) => {
+      const mode = btn.getAttribute('data-mode');
+      const isList = state.currentView === 'tracks';
+      btn.classList.toggle('is-active', (mode === 'list' && isList) || (mode === 'grid' && !isList));
+    });
   }
 }

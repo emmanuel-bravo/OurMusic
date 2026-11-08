@@ -1,9 +1,9 @@
 /*
- * OurMusic — Entrada Principal del Frontend (Fase 1, 2 y 3 Completas)
- * Enlaza Store, API REST, SSE, Vistas de Álbumes, Detalle de Álbum,
- * Tabla de Pistas con Columnas, Búsqueda Instantánea FTS5,
- * Paneles Desplegables de Cola de Reproducción y Consola DSP, y
- * Modo Inmersivo de Sala de Escucha con Letras Sincronizadas (.LRC).
+ * OurMusic — Entrada Principal del Frontend (Fases 1, 2, 3 y 4 Completas)
+ * Suite HiFi completa: Store reactivo, API REST y SSE, Álbumes, Pistas,
+ * Artistas y Géneros, Explorador de Carpetas Locales, Consola DSP 64-bit,
+ * Cola de Reproducción Drag & Drop, Modo Inmersivo con Letras .LRC,
+ * Menús Contextuales con Clic Derecho, Inspector de Metadatos y Toasts.
  */
 import { store } from './js/store.js';
 import { ApiClient } from './js/api.js';
@@ -17,6 +17,12 @@ import { SearchDropdown } from './js/searchDropdown.js';
 import { QueueDrawer } from './js/queueDrawer.js';
 import { DspDrawer } from './js/dspDrawer.js';
 import { ImmersiveLyricsView } from './js/immersiveLyricsView.js';
+import { FoldersView } from './js/foldersView.js';
+import { ArtistsView } from './js/artistsView.js';
+import { ContextMenu } from './js/contextMenu.js';
+import { TagInspectorModal } from './js/tagInspectorModal.js';
+import { ShortcutsModal } from './js/shortcutsModal.js';
+import { toasts } from './js/toasts.js';
 import { icon } from './js/icons.js';
 
 class App {
@@ -25,11 +31,15 @@ class App {
     this.currentDrawer = null;
     this.currentDrawerType = null;
     this.immersiveView = null;
+    this.contextMenu = null;
     this.init();
   }
 
   async init() {
-    console.log('[OurMusic UI] Inicializando Fase 1, Fase 2 & Fase 3...');
+    console.log('[OurMusic UI] Inicializando Fases 1 a 4...');
+
+    // Instanciar Gestor de Menú Contextual Global
+    this.contextMenu = new ContextMenu({ store });
 
     // Instanciar Componentes del Esqueleto
     this.sidebar = new Sidebar({
@@ -158,32 +168,78 @@ class App {
         case 'telemetry':
           store.setPlaybackTelemetry(data);
           break;
-        case 'track_started':
+        case 'track_started': {
+          const startedTrack =
+            data.track ||
+            store.state.queueState?.currentTrack ||
+            store.state.tracks?.find((t) => t.filePath === data.path) ||
+            store.state.playback?.track ||
+            (data.path
+              ? {
+                  id: data.path,
+                  filePath: data.path,
+                  title: data.path.split('/').pop(),
+                  artist: 'Reproduciendo',
+                  codec: data.codec || 'PCM',
+                  sampleRate: data.sampleRate || 44100,
+                  bitDepth: data.bitDepth || 16,
+                }
+              : null);
           store.setState({
             playback: {
               state: 'playing',
-              track: data.track,
+              track: startedTrack,
               isDsdNative: Boolean(data.isDsdNative),
               isDop: Boolean(data.isDop),
             },
           });
           break;
+        }
         case 'playback_ended':
           store.setState({ playback: { state: 'stopped' } });
           break;
-        case 'queue_updated':
-          store.setState({ queueState: data });
+        case 'queue_updated': {
+          const nextPlayback = {};
+          if (data?.currentTrack) {
+            nextPlayback.track = data.currentTrack;
+          }
+          if (data?.repeatMode !== undefined) {
+            nextPlayback.repeat = data.repeatMode;
+          }
+          if (typeof data?.shuffle === 'boolean') {
+            nextPlayback.shuffle = data.shuffle;
+          }
+          store.setState({
+            queueState: data,
+            ...(Object.keys(nextPlayback).length > 0 ? { playback: nextPlayback } : {}),
+          });
           break;
+        }
         case 'eq_updated':
           store.setState({ eqState: data });
           break;
         case 'library_changed':
         case 'scan_completed':
           this.refreshSummary();
+          toasts.show({
+            title: 'Biblioteca actualizada',
+            message: 'Índice SQLite FTS5 sincronizado',
+            type: 'info',
+          });
           break;
         case 'watcher_indexed':
+          toasts.show({
+            title: 'Nueva pista indexada',
+            message: data.path ? data.path.split('/').pop() : 'Vigilancia inotify',
+            type: 'success',
+          });
+          break;
         case 'watcher_removed':
-          console.log(`[SSE Watcher] ${event}:`, data);
+          toasts.show({
+            title: 'Archivo eliminado',
+            message: data.path ? data.path.split('/').pop() : 'Actualizado en biblioteca',
+            type: 'info',
+          });
           break;
       }
     });
@@ -191,9 +247,9 @@ class App {
 
   async loadInitialData() {
     try {
-      const boot = await ApiClient.getBootstrap(100, 0);
+      const boot = await ApiClient.getBootstrap(250, 0);
       store.setState({
-        summary: boot.summary || {},
+        summary: boot.librarySummary || boot.summary || {},
         tracks: boot.tracks || [],
         queueState: boot.queueState || { queue: [], currentIndex: -1 },
         eqState: boot.eqState || null,
@@ -217,8 +273,17 @@ class App {
 
   async refreshSummary() {
     try {
-      const summary = await ApiClient.getSummary();
-      store.setState({ summary });
+      const [res, tracksRes, plRes] = await Promise.all([
+        ApiClient.getSummary().catch(() => null),
+        ApiClient.getTracks({ limit: 250, offset: 0 }).catch(() => null),
+        ApiClient.get('/api/playlists').catch(() => null),
+      ]);
+      const nextState = {};
+      if (res) nextState.summary = res.summary || res;
+      if (tracksRes?.tracks) nextState.tracks = tracksRes.tracks;
+      if (plRes?.playlists) nextState.playlists = plRes.playlists;
+      if (plRes?.smartPlaylists) nextState.smartPlaylists = plRes.smartPlaylists;
+      store.setState(nextState);
     } catch (err) {
       console.error('Error refrescando summary:', err);
     }
@@ -252,19 +317,34 @@ class App {
       new TracksTableView({
         container,
         store,
+        onContextMenu: (args) => this.contextMenu.show(args),
+      });
+    } else if (['artists', 'genres', 'composers'].includes(view)) {
+      const av = new ArtistsView({
+        container,
+        store,
+        onArtistSelect: (name) => {
+          store.setState({ currentView: 'tracks', searchQuery: name });
+        },
+      });
+      av.filterMode = view;
+      av.render();
+      av.bindEvents();
+    } else if (view === 'folders') {
+      new FoldersView({
+        container,
+        store,
+        onTrackClick: (trk) => ApiClient.play(trk).catch(console.error),
+        onContextMenu: (args) => this.contextMenu.show(args),
       });
     } else {
-      // Placeholder para vistas restantes (Artistas, Géneros, Carpetas)
-      container.innerHTML = `
-        <div class="om-Content">
-          <div class="om-SectionToolbar">
-            <h1>${view.toUpperCase()}</h1>
-          </div>
-          <div style="padding:48px;text-align:center;color:var(--text-3)">
-            Vista preparada para Fase 4.
-          </div>
-        </div>
-      `;
+      new AlbumsView({
+        container,
+        store,
+        onAlbumClick: (albumData) => {
+          this.openAlbumDetail(albumData, container);
+        },
+      });
     }
   }
 
@@ -277,6 +357,7 @@ class App {
       onBack: () => {
         store.setState({ currentView: 'albums' });
       },
+      onContextMenu: (args) => this.contextMenu.show(args),
     });
   }
 
@@ -300,6 +381,9 @@ class App {
         } else if (store.state.searchQuery) {
           store.setState({ searchQuery: '' });
         }
+      } else if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+        e.preventDefault();
+        new ShortcutsModal({});
       } else if (e.key === 'F11') {
         e.preventDefault();
         store.setState({ immersiveOpen: !store.state.immersiveOpen });
@@ -314,6 +398,31 @@ class App {
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault();
         store.setState({ immersiveOpen: !store.state.immersiveOpen });
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'i' || e.key === 'I')) {
+        e.preventDefault();
+        const currentTrk = store.state.playback?.track;
+        if (currentTrk) {
+          new TagInspectorModal({ store, tracks: [currentTrk] });
+        }
+      } else if (e.key === '1') {
+        store.setState({ currentView: 'albums' });
+      } else if (e.key === '2') {
+        store.setState({ currentView: 'tracks' });
+      } else if (e.key === '3') {
+        store.setState({ currentView: 'folders' });
+      } else if (e.key === 'm' || e.key === 'M') {
+        const curVol = store.state.playback.volume || 0.8;
+        const newVol = curVol > 0 ? 0 : 0.8;
+        ApiClient.setVolume(newVol).catch(console.error);
+        store.setState({ playback: { volume: newVol } });
+      } else if (e.key === 's' || e.key === 'S') {
+        const cur = store.state.playback.shuffle;
+        ApiClient.setModes({ shuffle: !cur }).catch(console.error);
+      } else if (e.key === 'r' || e.key === 'R') {
+        const cur = store.state.playback.repeat;
+        const modes = ['off', 'all', 'one'];
+        const next = modes[(modes.indexOf(cur) + 1) % modes.length];
+        ApiClient.setModes({ repeat: next }).catch(console.error);
       } else if (e.code === 'Space') {
         e.preventDefault();
         const { playback } = store.state;
@@ -328,6 +437,26 @@ class App {
       } else if (e.code === 'ArrowLeft' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         ApiClient.previous().catch(console.error);
+      } else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        const cur = store.state.playback.positionSec || 0;
+        ApiClient.seek(cur + 10).catch(console.error);
+      } else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        const cur = store.state.playback.positionSec || 0;
+        ApiClient.seek(Math.max(0, cur - 10)).catch(console.error);
+      } else if (e.code === 'ArrowUp') {
+        e.preventDefault();
+        const cur = store.state.playback.volume ?? 0.8;
+        const next = Math.min(1.0, cur + 0.05);
+        ApiClient.setVolume(next).catch(console.error);
+        store.setState({ playback: { volume: next } });
+      } else if (e.code === 'ArrowDown') {
+        e.preventDefault();
+        const cur = store.state.playback.volume ?? 0.8;
+        const next = Math.max(0, cur - 0.05);
+        ApiClient.setVolume(next).catch(console.error);
+        store.setState({ playback: { volume: next } });
       }
     });
   }

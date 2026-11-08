@@ -66,16 +66,23 @@ export class ApiClient {
   }
 
   static addFolder(folderPath) {
-    return this.post('/api/library/folder', { path: folderPath });
+    return this.post('/api/library/scan', { directory: folderPath, path: folderPath });
   }
 
   static startScan(folderPath = null) {
-    return this.post('/api/library/scan', folderPath ? { path: folderPath } : {});
+    return this.post('/api/library/scan', folderPath ? { directory: folderPath, path: folderPath } : {});
   }
 
   // --- Player Transport ---
   static play(track = null, index = null) {
-    return this.post('/api/player/play', { track, index });
+    if (Array.isArray(track)) {
+      const trackIds = track.map((t) => (typeof t === 'object' ? t.id || t.filePath : t)).filter(Boolean);
+      return this.post('/api/player/play', { trackIds, startIndex: index ?? 0 });
+    }
+    const trackId = typeof track === 'object' && track ? track.id : typeof track === 'string' ? track : null;
+    const path = typeof track === 'object' && track ? track.filePath : null;
+    const queueIndex = typeof index === 'number' ? index : null;
+    return this.post('/api/player/play', { track, trackId, path, queueIndex });
   }
 
   static pause() {
@@ -87,7 +94,7 @@ export class ApiClient {
   }
 
   static seek(positionSec) {
-    return this.post('/api/player/seek', { positionSec });
+    return this.post('/api/player/seek', { seconds: positionSec, positionSec });
   }
 
   static next() {
@@ -99,11 +106,12 @@ export class ApiClient {
   }
 
   static setVolume(volume) {
-    return this.post('/api/player/volume', { volume });
+    return this.post('/api/player/volume', { value: volume, volume });
   }
 
-  static setModes({ repeat, shuffle }) {
-    return this.post('/api/player/modes', { repeat, shuffle });
+  static setModes({ repeat, repeatMode, shuffle }) {
+    const rm = repeatMode ?? repeat;
+    return this.post('/api/player/modes', { repeatMode: rm, repeat: rm, shuffle });
   }
 
   // --- Queue ---
@@ -112,7 +120,12 @@ export class ApiClient {
   }
 
   static enqueue({ track = null, tracks = null, playNext = false }) {
-    return this.post('/api/queue/enqueue', { track, tracks, playNext });
+    const trackId = typeof track === 'object' && track ? track.id : typeof track === 'string' ? track : null;
+    const path = typeof track === 'object' && track ? track.filePath : null;
+    const trackIds = Array.isArray(tracks)
+      ? tracks.map((t) => (typeof t === 'object' ? t.id || t.filePath : t)).filter(Boolean)
+      : null;
+    return this.post('/api/queue/enqueue', { track, trackId, path, tracks, trackIds, playNext });
   }
 
   static removeFromQueue(index) {

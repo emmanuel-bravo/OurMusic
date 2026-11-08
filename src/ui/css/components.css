@@ -575,8 +575,11 @@ html, body {
 
 .om-AlbumGrid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
   gap: 20px 18px;
+  overflow-y: auto;
+  flex: 1;
+  padding-bottom: 24px;
 }
 
 .om-AlbumCard {
@@ -635,11 +638,13 @@ html, body {
   transform: translateY(4px);
 }
 .om-AlbumCard.is-hovered .om-AlbumCard__play,
+.om-AlbumCard:hover .om-AlbumCard__play,
 .om-AlbumCard.is-playing .om-AlbumCard__play {
   opacity: 1;
   transform: translateY(0);
 }
-.om-AlbumCard.is-hovered .om-AlbumCard__art {
+.om-AlbumCard.is-hovered .om-AlbumCard__art,
+.om-AlbumCard:hover .om-AlbumCard__art {
   border-color: var(--line-3);
 }
 .om-AlbumCard__title {
@@ -1303,7 +1308,8 @@ html, body {
   border: 1px solid var(--line-1);
   border-radius: var(--r-10);
   background: rgba(19, 18, 17, 0.55);
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
