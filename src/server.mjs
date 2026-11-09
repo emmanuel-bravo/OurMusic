@@ -484,19 +484,47 @@ export async function createOurMusicApp({
         const idx = Number(body.band);
         const gainDb = Number(body.gainDb) || 0;
         const cur = presets.getActiveState();
+        const targetBands = body.numBands === 5 ? 5 : Math.max(cur.numBands || 10, idx + 1 > 5 ? 10 : cur.numBands || 10);
+        if (cur.gains.length < targetBands) {
+          while (cur.gains.length < targetBands) cur.gains.push(0);
+        }
         if (idx >= 0 && idx < cur.gains.length) {
           cur.gains[idx] = gainDb;
         }
-        const eqState = presets.saveActiveState({ gains: cur.gains, activePresetId: 'custom' });
-        await engine.setBandGain(idx, eqState.gains[idx]);
+        const newEnabled = body.enabled !== undefined ? Boolean(body.enabled) : true;
+        const eqState = presets.saveActiveState({
+          enabled: newEnabled,
+          numBands: targetBands,
+          gains: cur.gains,
+          activePresetId: 'custom',
+        });
+        await engine.configureEqualizer({
+          enabled: eqState.enabled,
+          numBands: eqState.numBands,
+          preampDb: eqState.preampDb,
+          gains: eqState.gains,
+          smoothing: eqState.smoothingEnabled,
+          limiter: eqState.limiterEnabled,
+        });
         broadcastSse('eq_updated', eqState);
         return sendJson(res, 200, { ok: true, eqState });
       }
 
       if (method === 'POST' && pathname === '/api/eq/preamp') {
         const body = await readJsonBody(req);
-        const eqState = presets.saveActiveState({ preampDb: Number(body.preampDb) || 0 });
-        await engine.setPreamp(eqState.preampDb);
+        const newEnabled = body.enabled !== undefined ? Boolean(body.enabled) : true;
+        const eqState = presets.saveActiveState({
+          enabled: newEnabled,
+          preampDb: Number(body.preampDb) || 0,
+        });
+        await engine.configureEqualizer({
+          enabled: eqState.enabled,
+          numBands: eqState.numBands,
+          preampDb: eqState.preampDb,
+          gains: eqState.gains,
+          smoothing: eqState.smoothingEnabled,
+          limiter: eqState.limiterEnabled,
+        });
         broadcastSse('eq_updated', eqState);
         return sendJson(res, 200, { ok: true, eqState });
       }
@@ -554,7 +582,9 @@ export async function createOurMusicApp({
         const nb = body.numBands || presets.activeState.numBands;
         const p = presets.getPreset(body.id, nb);
         if (!p) return sendJson(res, 404, { ok: false, error: 'Preset no encontrado' });
+        const newEnabled = body.enabled !== undefined ? Boolean(body.enabled) : body.id !== 'flat' ? true : presets.activeState.enabled;
         const eqState = presets.saveActiveState({
+          enabled: newEnabled,
           numBands: p.numBands,
           preampDb: p.preampDb,
           gains: p.gains,

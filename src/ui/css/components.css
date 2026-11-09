@@ -35,6 +35,7 @@ html, body {
   stroke-linecap: round;
   stroke-linejoin: round;
   flex-shrink: 0;
+  pointer-events: none;
 }
 .ic .f {
   fill: currentColor;

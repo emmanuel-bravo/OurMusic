@@ -303,10 +303,14 @@ class App {
   }
 
   renderCurrentView(view, container) {
+    if (this.activeViewInstance && typeof this.activeViewInstance.destroy === 'function') {
+      this.activeViewInstance.destroy();
+      this.activeViewInstance = null;
+    }
     container.innerHTML = '';
 
     if (view === 'albums') {
-      new AlbumsView({
+      this.activeViewInstance = new AlbumsView({
         container,
         store,
         onAlbumClick: (albumData) => {
@@ -314,7 +318,7 @@ class App {
         },
       });
     } else if (view === 'tracks') {
-      new TracksTableView({
+      this.activeViewInstance = new TracksTableView({
         container,
         store,
         onContextMenu: (args) => this.contextMenu.show(args),
@@ -330,15 +334,16 @@ class App {
       av.filterMode = view;
       av.render();
       av.bindEvents();
+      this.activeViewInstance = av;
     } else if (view === 'folders') {
-      new FoldersView({
+      this.activeViewInstance = new FoldersView({
         container,
         store,
         onTrackClick: (trk) => ApiClient.play(trk).catch(console.error),
         onContextMenu: (args) => this.contextMenu.show(args),
       });
     } else {
-      new AlbumsView({
+      this.activeViewInstance = new AlbumsView({
         container,
         store,
         onAlbumClick: (albumData) => {
@@ -349,8 +354,12 @@ class App {
   }
 
   openAlbumDetail(albumData, container) {
+    if (this.activeViewInstance && typeof this.activeViewInstance.destroy === 'function') {
+      this.activeViewInstance.destroy();
+      this.activeViewInstance = null;
+    }
     container.innerHTML = '';
-    new AlbumDetailView({
+    this.activeViewInstance = new AlbumDetailView({
       container,
       store,
       albumData,
@@ -463,5 +472,6 @@ class App {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  window.__omStore = store;
   window.__ourmusic = new App();
 });

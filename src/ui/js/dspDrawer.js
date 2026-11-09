@@ -49,10 +49,42 @@ export class DspDrawer {
 
     this.unsubscribe = this.store.subscribe((state, keys) => {
       if (keys.includes('eqState') && state.eqState) {
-        this.eqState = { ...this.eqState, ...state.eqState };
-        this.render();
+        this.mergeEqState(state.eqState);
+        if (!this.isDraggingFader) {
+          this.render();
+        }
       }
     });
+  }
+
+  mergeEqState(incoming) {
+    if (!incoming) return;
+    let gains = Array.isArray(incoming.gains) ? [...incoming.gains] : [...(this.eqState.gains || [])];
+    if (gains.length === 5) {
+      gains = [
+        gains[0],
+        (gains[0] + gains[1]) / 2,
+        gains[1],
+        (gains[1] + gains[2]) / 2,
+        gains[2],
+        gains[2],
+        (gains[2] + gains[3]) / 2,
+        gains[3],
+        (gains[3] + gains[4]) / 2,
+        gains[4],
+      ];
+    }
+    while (gains.length < 10) gains.push(0);
+    this.eqState = {
+      ...this.eqState,
+      ...incoming,
+      numBands: 10,
+      gains: gains.slice(0, 10),
+      peqBands:
+        Array.isArray(incoming.peqBands) && incoming.peqBands.length > 0
+          ? incoming.peqBands
+          : this.eqState.peqBands,
+    };
   }
 
   destroy() {
@@ -68,15 +100,17 @@ export class DspDrawer {
       ]);
 
       if (eqData?.eqState) {
-        this.eqState = { ...this.eqState, ...eqData.eqState };
+        this.mergeEqState(eqData.eqState);
         if (Array.isArray(eqData.presets)) {
           this.presets = eqData.presets;
         }
       }
       if (dspData?.eqState) {
-        this.eqState = { ...this.eqState, ...dspData.eqState };
+        this.mergeEqState(dspData.eqState);
       }
-      this.render();
+      if (!this.isDraggingFader) {
+        this.render();
+      }
     } catch (err) {
       console.error('[OurMusic DSP] Error cargando estado DSP:', err);
     }
@@ -504,6 +538,7 @@ export class DspDrawer {
 
       track.addEventListener('mousedown', (e) => {
         isDragging = true;
+        this.isDraggingFader = true;
         updateGainFromEvent(e);
 
         const onMouseMove = (moveEv) => {
@@ -512,6 +547,7 @@ export class DspDrawer {
 
         const onMouseUp = () => {
           isDragging = false;
+          this.isDraggingFader = false;
           window.removeEventListener('mousemove', onMouseMove);
           window.removeEventListener('mouseup', onMouseUp);
         };

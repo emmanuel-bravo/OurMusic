@@ -1,4 +1,4 @@
-.PHONY: all build test start clean wasapi-check
+.PHONY: all build test test-ui start clean wasapi-check
 
 all: build
 
@@ -14,6 +14,9 @@ start: build
 
 test: build wasapi-check
 	node tests/run_all_tests.mjs
+
+test-ui: build
+	node tests/ui_e2e.mjs
 
 clean:
 	rm -rf bin/ourmusic-engine bin/ourmusic-gui tests/.tmp_fixtures

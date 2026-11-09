@@ -271,7 +271,24 @@ export class QueueDrawer {
   }
 
   update(state) {
-    // Si la pista actual o la cola cambiaron, redibujamos el panel
+    const { queueState, playback } = state;
+    const queue = queueState?.queue || [];
+    const currentIndex = queueState?.currentIndex ?? -1;
+    const currentTrack =
+      playback.track ||
+      queueState?.currentTrack ||
+      (currentIndex >= 0 ? queue[currentIndex] : null);
+
+    // Firma estructural de la cola: solo reconstruir el DOM si cambió la cola o la pista activa
+    const queueSig = `${currentTrack?.id || ''}|${currentIndex}|${queue.map((t) => t.id || t.filePath).join(',')}`;
+    if (this._lastQueueSig === queueSig) {
+      const elapsedEl = this.container.querySelector('#queue-elapsed-time');
+      if (elapsedEl && currentTrack) {
+        elapsedEl.textContent = `${formatTime(playback.positionSec)} / ${formatTime(playback.durationSec || currentTrack.durationSec || 0)}`;
+      }
+      return;
+    }
+    this._lastQueueSig = queueSig;
     this.render();
     this.bindEvents();
   }

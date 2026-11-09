@@ -136,9 +136,9 @@ export class PresetManager {
     this.activeState = {
       enabled: false,
       peqMode: false,
-      numBands: 5,
+      numBands: 10,
       preampDb: 0.0,
-      gains: [0, 0, 0, 0, 0],
+      gains: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
       peqBands: [],
       smoothingEnabled: true,
       limiterEnabled: true,

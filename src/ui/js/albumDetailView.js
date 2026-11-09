@@ -24,11 +24,15 @@ export class AlbumDetailView {
     this.render();
     this.loadAlbumTracks();
 
-    this.store.subscribe((state, keys) => {
+    this.unsubscribe = this.store.subscribe((state, keys) => {
       if (keys.includes('playback')) {
         this.updatePlayingRow(state.playback);
       }
     });
+  }
+
+  destroy() {
+    if (this.unsubscribe) this.unsubscribe();
   }
 
   render() {

@@ -202,9 +202,10 @@ export class NowPlayingBar {
     const { playback } = state;
     const trk = playback.track;
 
-    // Transporte (Play/Pause Icon)
+    // Transporte (Play/Pause Icon) — actualizar solo cuando cambia el estado para no destruir el SVG durante un clic
     const playBtn = this.container.querySelector('#np-play-btn');
-    if (playBtn) {
+    if (playBtn && this._lastRenderedPlayState !== playback.state) {
+      this._lastRenderedPlayState = playback.state;
       playBtn.innerHTML = playback.state === 'playing' ? icon('pause', { size: 18 }) : icon('play', { size: 18 });
     }
 
@@ -243,10 +244,14 @@ export class NowPlayingBar {
       if (artistEl) artistEl.textContent = `${trk.artist || 'Artista Desconocido'} · ${trk.album || 'Álbum Desconocido'}`;
 
       if (coverWrap) {
-        if (trk.coverId) {
-          coverWrap.innerHTML = `<img src="/api/covers/${encodeURIComponent(trk.coverId)}" class="cover-svg" style="width:100%;height:100%;object-fit:cover" alt="Cover" />`;
-        } else {
-          coverWrap.innerHTML = coverSvg({ title: trk.title || '', artist: trk.artist || '', palette: ['#1d2a44', '#e8a25c', '#5b7fb8', '#f3d8a7'], style: 'waves' });
+        const coverSig = `${trk.id || ''}|${trk.coverId || ''}|${trk.title || ''}`;
+        if (this._lastRenderedCoverSig !== coverSig) {
+          this._lastRenderedCoverSig = coverSig;
+          if (trk.coverId) {
+            coverWrap.innerHTML = `<img src="/api/covers/${encodeURIComponent(trk.coverId)}" class="cover-svg" style="width:100%;height:100%;object-fit:cover" alt="Cover" />`;
+          } else {
+            coverWrap.innerHTML = coverSvg({ title: trk.title || '', artist: trk.artist || '', palette: ['#1d2a44', '#e8a25c', '#5b7fb8', '#f3d8a7'], style: 'waves' });
+          }
         }
       }
 

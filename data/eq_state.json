@@ -5,7 +5,7 @@
   "preampDb": 0,
   "gains": [
     0,
-    0,
+    0.5,
     0,
     0,
     0,
@@ -17,11 +17,11 @@
   ],
   "peqBands": [],
   "smoothingEnabled": false,
-  "limiterEnabled": false,
+  "limiterEnabled": true,
   "customHookEnabled": true,
   "stereoWidth": 1,
   "crossfeed": {
-    "enabled": true,
+    "enabled": false,
     "cutoffHz": 700,
     "feedDb": -6,
     "itdUs": 260
@@ -42,5 +42,5 @@
     "targetRate": 0,
     "quality": "high"
   },
-  "activePresetId": "flat"
+  "activePresetId": "custom"
 }

@@ -210,6 +210,9 @@ export class EngineBridge extends EventEmitter {
 
   async getStatus() {
     const res = await this.sendCommand('status');
+    if (res.status && res.status.path !== undefined && res.status.currentPath === undefined) {
+      res.status.currentPath = res.status.path;
+    }
     this.lastStatus = res.status;
     return res.status;
   }

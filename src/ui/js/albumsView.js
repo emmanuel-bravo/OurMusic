@@ -15,11 +15,15 @@ export class AlbumsView {
     this.bindEvents();
     this.update(this.store.state);
 
-    this.store.subscribe((state, keys) => {
+    this.unsubscribe = this.store.subscribe((state, keys) => {
       if (keys.includes('summary') || keys.includes('activeFilter')) {
         this.update(state);
       }
     });
+  }
+
+  destroy() {
+    if (this.unsubscribe) this.unsubscribe();
   }
 
   render() {

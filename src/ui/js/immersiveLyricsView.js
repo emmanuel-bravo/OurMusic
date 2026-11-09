@@ -367,9 +367,10 @@ export class ImmersiveLyricsView {
       return;
     }
 
-    // Actualizar Play / Pause Icon
+    // Actualizar Play / Pause Icon solo cuando cambia el estado
     const playBtn = this.container.querySelector('#imm-play-btn');
-    if (playBtn) {
+    if (playBtn && this._lastRenderedPlayState !== playback.state) {
+      this._lastRenderedPlayState = playback.state;
       playBtn.innerHTML =
         playback.state === 'playing' ? icon('pause', { size: 22 }) : icon('play', { size: 22 });
     }
